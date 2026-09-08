@@ -1,0 +1,3 @@
+# The working tree is LF everywhere already. Without this, core.autocrlf=true
+# on Windows checks these files out as CRLF and every line reads as changed.
+* text=auto eol=lf

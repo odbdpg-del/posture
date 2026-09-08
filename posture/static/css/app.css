@@ -1,0 +1,642 @@
+/* Posture — dark instrumentation theme.
+ *
+ * Semantic colour is rationed on purpose. Mint, amber and coral mean posture
+ * state and nothing else, so a glance at any coloured thing in the interface
+ * carries information. Chrome, navigation and affordances stay neutral; the
+ * primary action colour is a desaturated slate, not the "good posture" mint.
+ */
+
+:root {
+  --bg: #090C0B;
+  --panel: #111714;
+  --elevated: #161E1A;
+  --border: #26332C;
+  --border-soft: #1C251F;
+
+  --text: #E8EDE9;
+  --text-dim: #8A9992;
+  --text-faint: #5D6B64;
+
+  --good: #4ADE9B;
+  --good-dim: #1E5B41;
+  --warn: #E8B34A;
+  --warn-dim: #5B4620;
+  --bad: #F06A5D;
+  --bad-dim: #5C2A25;
+  --idle: #46554E;
+
+  --accent: #7C8F9E;
+
+  --radius: 4px;
+  --radius-lg: 6px;
+  --ease: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  --header-h: 52px;
+  --sidebar-w: 172px;
+  --sidebar-w-collapsed: 56px;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+button, input, select {
+  font: inherit;
+  color: inherit;
+  font-family: var(--sans);
+}
+
+/* Numeric readouts line up column-wise and do not jitter as digits change. */
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #33443A; }
+
+/* ── App shell ─────────────────────────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-rows: var(--header-h) 1fr;
+  height: 100vh;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  min-height: 0;
+  transition: grid-template-columns var(--ease);
+}
+.shell.collapsed .body { grid-template-columns: var(--sidebar-w-collapsed) 1fr; }
+
+.view {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+/* ── Top status bar ────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.topbar .sep { width: 1px; height: 20px; background: var(--border); }
+
+.statechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.statechip .led {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--idle);
+  flex: none;
+}
+.statechip.live .led { background: var(--good); animation: breathe 2.6s ease-in-out infinite; }
+.statechip.warn .led { background: var(--warn); }
+.statechip.bad .led { background: var(--bad); }
+.statechip.live { color: var(--text); }
+
+/* Monitoring is a steady state, so it breathes rather than blinks. Warnings
+   never animate: a flashing alert in peripheral vision is an irritant, and the
+   thing it is reporting is already several seconds old by design. */
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.sessiontime { font-size: 13px; color: var(--text); }
+.topbar .label {
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); margin-right: 6px;
+}
+.spacer { flex: 1; }
+
+.camchips { display: flex; gap: 6px; align-items: center; }
+.camchip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--elevated);
+}
+.camchip .led { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+.camchip.ok .led { background: var(--good); }
+.camchip.warn .led { background: var(--warn); }
+.camchip.bad .led { background: var(--bad); }
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+
+button {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease), color var(--ease);
+}
+button:hover:not(:disabled) { border-color: #38493F; background: #1B241F; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: #1E2A31; border-color: #2F4250; color: #CFE0EA; }
+button.primary:hover:not(:disabled) { background: #24333C; border-color: #3B5364; }
+button.danger { color: var(--bad); border-color: #3A2724; }
+button.danger:hover:not(:disabled) { background: #241A18; border-color: var(--bad-dim); }
+button.ghost { background: transparent; border-color: transparent; color: var(--text-dim); }
+button.ghost:hover:not(:disabled) { color: var(--text); background: var(--elevated); }
+button.sm { padding: 3px 8px; font-size: 12px; }
+
+input, select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+  transition: border-color var(--ease);
+}
+input:focus, select:focus { outline: none; border-color: #3E5A6B; }
+input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  gap: 2px;
+  min-width: 0;
+}
+.navitem {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background var(--ease), color var(--ease);
+  text-align: left;
+  width: 100%;
+}
+.navitem:hover { background: var(--elevated); color: var(--text); }
+/* Active is a left rule and a lift in weight, not a slab of colour. */
+.navitem.active {
+  background: var(--elevated);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.navitem .ic { width: 16px; text-align: center; flex: none; opacity: 0.85; }
+.navitem .lbl { overflow: hidden; text-overflow: ellipsis; }
+.shell.collapsed .navitem .lbl { display: none; }
+.shell.collapsed .navitem { justify-content: center; }
+.navbadge {
+  margin-left: auto; font-size: 10px; padding: 1px 5px; border-radius: 999px;
+  background: var(--bad-dim); color: var(--bad);
+}
+.shell.collapsed .navbadge { display: none; }
+
+/* ── Panels ────────────────────────────────────────────────────────────── */
+
+.panel {
+  /* Positioned so an absolutely-placed child (the timeline tooltip) measures
+     against its own panel. Without this it resolved against whatever ancestor
+     happened to be positioned and drifted across the app. */
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex: none;
+}
+.panel-body { padding: 12px; min-height: 0; overflow: auto; }
+.panel-body.tight { padding: 8px; }
+
+/* ── Live view layout ──────────────────────────────────────────────────── */
+
+.live {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.live .stage { grid-column: 1; grid-row: 1; min-height: 0; }
+.live .side { grid-column: 2; grid-row: 1 / span 2; min-height: 0; overflow: auto;
+              display: flex; flex-direction: column; gap: 12px; }
+.live .strip { grid-column: 1; grid-row: 2; }
+
+/* ── Camera stage ──────────────────────────────────────────────────────── */
+
+.stage { position: relative; overflow: hidden; }
+.stage .panel-body {
+  padding: 0; position: relative; flex: 1; display: flex;
+  align-items: center; justify-content: center; background: #050807;
+}
+/* The frame carries the camera's aspect ratio and the image fills it exactly,
+   so the SVG overlay can use a 0..100 viewBox and stay registered to the
+   picture. Letting the image letterbox inside a differently-shaped box would
+   put every overlay line in the wrong place. */
+.tile-frame { position: relative; line-height: 0; width: 100%;
+              max-width: 100%; max-height: 100%;
+              aspect-ratio: var(--ar, 4 / 3); margin: auto; }
+.tile-frame img { display: block; width: 100%; height: 100%; }
+.tile-frame svg { position: absolute; inset: 0; width: 100%; height: 100%;
+                  pointer-events: none; }
+/* Skeleton mode has no picture behind it, so the frame provides the ground and
+   a faint grid gives the figure somewhere to sit. */
+.tile-frame.skeleton {
+  background:
+    linear-gradient(var(--border-soft) 1px, transparent 1px) 0 0 / 100% 12.5%,
+    linear-gradient(90deg, var(--border-soft) 1px, transparent 1px) 0 0 / 12.5% 100%,
+    var(--elevated);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.tile-frame.skeleton img { display: none; }
+
+.tile { position: relative; display: flex; flex-direction: column;
+        min-width: 0; min-height: 0; }
+/* In single view the tile is the stage: it has to stretch, or the frame's
+   max-height has nothing to measure against and the picture collapses to its
+   intrinsic size in the middle of a large black panel. */
+.stage > .panel-body > .tile { width: 100%; height: 100%; }
+.tile-body { position: relative; flex: 1; min-height: 0; display: flex;
+             align-items: center; justify-content: center; }
+.tile-head { display: flex; align-items: center; gap: 7px; padding: 6px 8px;
+             font-size: 11px; color: var(--text-dim); }
+.tile-head .nm { color: var(--text); }
+.tile-head .led { width: 6px; height: 6px; border-radius: 50%;
+                  background: var(--idle); flex: none; }
+.tile-head .led.ok { background: var(--good); }
+.tile-head .led.warn { background: var(--warn); }
+.tile-head .led.bad { background: var(--bad); }
+.tile.pickable { cursor: pointer; border: 1px solid var(--border);
+                 border-radius: var(--radius); background: #0B0F0D;
+                 transition: border-color var(--ease); }
+.tile.pickable:hover { border-color: #38493F; }
+.tile.pickable.active { border-color: var(--accent); }
+
+/* Grid layout for the all-cameras view. Scoped under .stage so it outranks the
+   flex centring that the single-camera stage body uses. */
+.stage > .panel-body.grid-body {
+  display: grid; gap: 10px; padding: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-content: start; align-items: start; justify-content: stretch;
+  overflow: auto;
+}
+
+/* Segmented control for the layout switch. */
+.headsel { background: var(--elevated); border: 1px solid var(--border);
+           color: var(--text-dim); font-size: 11px; padding: 2px 6px;
+           border-radius: var(--radius); letter-spacing: 0.04em; }
+.headsel:hover { color: var(--text); }
+
+.seg { display: inline-flex; border: 1px solid var(--border);
+       border-radius: var(--radius); overflow: hidden; }
+.segbtn { border: 0; border-radius: 0; background: transparent;
+          color: var(--text-faint); padding: 3px 10px; font-size: 11px;
+          letter-spacing: 0.08em; text-transform: uppercase; }
+.segbtn + .segbtn { border-left: 1px solid var(--border); }
+.segbtn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.segbtn.on { background: var(--elevated); color: var(--text); }
+.stage-empty { color: var(--text-faint); font-size: 13px; padding: 40px; text-align: center; }
+
+.camselect { display: flex; align-items: center; gap: 8px; }
+.camselect select { background: var(--elevated); }
+
+.thumbs {
+  position: absolute; left: 10px; bottom: 10px;
+  display: flex; gap: 6px; z-index: 2;
+}
+.thumb {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; font-size: 11px;
+  background: rgba(9, 12, 11, 0.82);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.thumb:hover { color: var(--text); border-color: #38493F; }
+.thumb.active { color: var(--text); border-color: var(--accent); }
+.thumb .led { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+.thumb.ok .led { background: var(--good); }
+.thumb.warn .led { background: var(--warn); }
+.thumb.bad .led { background: var(--bad); }
+
+.overlay-readout {
+  position: absolute; right: 10px; top: 10px;
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-end;
+  font-size: 11px; z-index: 2;
+  background: rgba(9, 12, 11, 0.7);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+  backdrop-filter: blur(6px);
+}
+.overlay-readout .row { display: flex; gap: 8px; align-items: baseline; }
+.overlay-readout .k { color: var(--text-faint); font-size: 10px;
+                      letter-spacing: 0.08em; text-transform: uppercase; }
+.overlay-readout .v { color: var(--text); }
+.overlay-readout .v.good { color: var(--good); }
+.overlay-readout .v.warn { color: var(--warn); }
+.overlay-readout .v.bad { color: var(--bad); }
+
+/* ── Posture score ─────────────────────────────────────────────────────── */
+
+.score { text-align: center; padding: 16px 12px 14px; }
+.score .value {
+  font-size: 62px; line-height: 1; font-weight: 300;
+  letter-spacing: -0.03em; color: var(--text);
+  transition: color var(--ease);
+}
+.score.good .value { color: var(--good); }
+.score.ok .value { color: var(--good); }
+.score.warn .value { color: var(--warn); }
+.score.bad .value { color: var(--bad); }
+.score.idle .value { color: var(--text-faint); font-size: 34px; }
+.score .band {
+  margin-top: 4px; font-size: 12px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.score .sub { margin-top: 8px; font-size: 12px; color: var(--text-faint); }
+.score .avg {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft);
+  font-size: 12px; color: var(--text-dim);
+  display: flex; justify-content: space-between;
+}
+
+/* ── Metric gauges ─────────────────────────────────────────────────────── */
+
+.gauges { display: flex; flex-direction: column; gap: 2px; }
+.gauge { padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.gauge:last-child { border-bottom: 0; }
+.gauge .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.gauge .name {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gauge .val { font-size: 15px; color: var(--text); white-space: nowrap; }
+.gauge .val .u { font-size: 10px; color: var(--text-faint); margin-left: 2px; }
+.gauge .track {
+  position: relative; height: 3px; margin-top: 7px;
+  background: var(--border-soft); border-radius: 2px;
+}
+.gauge .fill {
+  position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px;
+  background: var(--good); transition: width var(--ease), background var(--ease);
+}
+.gauge.warn .fill { background: var(--warn); }
+.gauge.bad .fill { background: var(--bad); }
+/* The limit sits two thirds along a 0..1.5x scale, leaving visible room past
+   it so "how far over" is readable rather than pinned at the end. */
+.gauge .limit { position: absolute; top: -3px; bottom: -3px; left: 66.6%;
+                width: 1px; background: var(--text-faint); opacity: 0.5; }
+.gauge .foot {
+  display: flex; justify-content: space-between; margin-top: 5px;
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gauge .status.good { color: var(--good); }
+.gauge .status.warn { color: var(--warn); }
+.gauge .status.bad { color: var(--bad); }
+
+/* Horizontal strip variant under the camera. */
+.strip .panel-body { display: flex; gap: 0; padding: 0; overflow-x: auto; }
+.strip .gauge { flex: 1 1 0; min-width: 132px; border-bottom: 0;
+                border-right: 1px solid var(--border-soft); }
+.strip .gauge:last-child { border-right: 0; }
+
+/* ── Alerts ────────────────────────────────────────────────────────────── */
+
+.alerts { display: flex; flex-direction: column; gap: 8px; }
+.alert-ok { display: flex; align-items: center; gap: 8px; color: var(--good);
+            font-size: 13px; }
+.alert {
+  border: 1px solid var(--bad-dim);
+  border-left-width: 2px;
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: rgba(240, 106, 93, 0.05);
+}
+.alert.warn { border-color: var(--warn-dim); background: rgba(232, 179, 74, 0.05); }
+.alert .t { font-size: 13px; color: var(--text); }
+.alert .d { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+/* ── Alert readout ─────────────────────────────────────────────────────── */
+
+.alertline { display: flex; align-items: baseline; gap: 8px; }
+.alertline .lvl {
+  font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.alertline.lv1 .lvl { color: var(--warn); }
+.alertline.lv2 .lvl { color: var(--warn); }
+.alertline.lv3 .lvl { color: var(--bad); }
+.alertline.snoozed .lvl { color: var(--text-faint); }
+.headline { font-size: 13px; color: var(--text); margin-top: 4px; }
+.holdbar { height: 3px; background: var(--border-soft); border-radius: 2px;
+           overflow: hidden; margin-top: 8px; }
+.holdbar i { display: block; height: 100%; width: 0; background: var(--good);
+             transition: width 200ms linear; }
+
+/* ── Daily summary ─────────────────────────────────────────────────────── */
+
+.figures { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           margin-bottom: 16px; }
+.figure { border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 10px 12px; background: var(--elevated); }
+.flabel { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+          color: var(--text-faint); }
+.fvalue { font-size: 26px; font-weight: 300; letter-spacing: -0.02em; margin-top: 2px; }
+.fsub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+/* One bar per bucket of the day. Height is how much of that bucket was
+   measured at all, so stretches with the app closed are visibly short rather
+   than filled in with a guess. */
+.daybars { display: flex; align-items: flex-end; gap: 1px; height: 96px;
+           border-bottom: 1px solid var(--border-soft); }
+.daybar { flex: 1 1 0; min-width: 1px; display: flex; flex-direction: column-reverse;
+          background: var(--border-soft); border-radius: 1px; overflow: hidden; }
+/* An empty bucket keeps its place so the gap in the day stays visible. */
+.daybar.empty { background: transparent; border-bottom: 1px solid var(--border-soft); }
+.daybar i { display: block; width: 100%; }
+.daybar i.g { background: var(--good); }
+.daybar i.b { background: var(--bad); }
+
+.dayaxis { display: flex; justify-content: space-between; margin-top: 4px;
+           font-size: 10px; color: var(--text-faint); }
+
+/* ── Timeline ──────────────────────────────────────────────────────────── */
+
+.timeline { position: relative; }
+.timeline svg { display: block; width: 100%; height: 120px; }
+.live .side .timeline svg { height: 90px; }
+.timeline .empty { color: var(--text-faint); font-size: 12px; padding: 28px 0;
+                   text-align: center; }
+.tt {
+  position: absolute; pointer-events: none; z-index: 5;
+  background: var(--elevated); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 7px 9px; font-size: 11px;
+  color: var(--text); white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.tt .k { color: var(--text-faint); }
+
+/* ── Generic content ───────────────────────────────────────────────────── */
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+/* Fills its parent — for view roots that should stretch. */
+.stack { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; }
+/* Content-height column — for lists inside a panel, so siblings below them
+   (an Apply button, say) are not pushed out of the panel. */
+.list { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.muted { color: var(--text-dim); font-size: 12px; }
+.faint { color: var(--text-faint); font-size: 11px; }
+h2.sec { font-size: 13px; margin: 0 0 4px; font-weight: 600; }
+
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 130px; }
+.field label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+               color: var(--text-faint); }
+
+.banner {
+  border: 1px solid var(--border); border-left-width: 2px;
+  border-radius: var(--radius); padding: 9px 11px; font-size: 12.5px;
+  color: var(--text-dim);
+}
+.banner.ok { border-left-color: var(--good); color: var(--good); }
+.banner.bad { border-left-color: var(--bad); color: var(--bad); }
+.banner.info { border-left-color: var(--accent); }
+.banner ul { margin: 5px 0 0; padding-left: 16px; }
+
+.devrow {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--elevated);
+}
+.devrow .name { font-size: 13px; }
+.devrow .grow { flex: 1; min-width: 120px; }
+.tag {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 7px; color: var(--text-faint);
+}
+.tag.ok { color: var(--good); border-color: var(--good-dim); }
+.tag.bad { color: var(--bad); border-color: var(--bad-dim); }
+.devthumb {
+  width: 96px; height: 72px; object-fit: cover; background: #050807;
+  border: 1px solid var(--border); border-radius: var(--radius); flex: none;
+}
+
+table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data th, table.data td { text-align: left; padding: 6px 8px;
+                               border-bottom: 1px solid var(--border-soft); }
+table.data th { color: var(--text-faint); font-weight: 500; font-size: 10px;
+                letter-spacing: 0.1em; text-transform: uppercase; }
+table.data td.n { text-align: right; }
+
+details.adv { border-top: 1px solid var(--border-soft); padding-top: 10px; margin-top: 10px; }
+details.adv summary {
+  cursor: pointer; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-faint); list-style: none;
+}
+details.adv summary::-webkit-details-marker { display: none; }
+details.adv summary::before { content: "▸ "; }
+details.adv[open] summary::before { content: "▾ "; }
+details.adv > *:not(summary) { margin-top: 10px; }
+
+.vis-rows { display: flex; flex-direction: column; gap: 3px; }
+.vis-row { display: grid; grid-template-columns: 1fr 42px; gap: 8px;
+           align-items: center; font-size: 11.5px; color: var(--text-dim); }
+.vis-row .bar { grid-column: 1 / -1; height: 2px; background: var(--border-soft);
+                border-radius: 1px; overflow: hidden; }
+.vis-row .bar i { display: block; height: 100%; background: var(--good-dim); }
+.vis-row.low .bar i { background: var(--bad-dim); }
+.vis-row.low { color: var(--text-faint); }
+
+/* ── Calibration wizard ────────────────────────────────────────────────── */
+
+.wizard { max-width: 560px; margin: 0 auto; text-align: center; padding: 26px 16px; }
+.wizard .step { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+                color: var(--text-faint); }
+.wizard h3 { font-size: 21px; font-weight: 400; margin: 12px 0 6px; }
+.wizard p { color: var(--text-dim); margin: 0 auto 18px; max-width: 44ch; font-size: 13px; }
+.countdown { font-size: 68px; font-weight: 200; color: var(--good); line-height: 1;
+             font-family: var(--mono); }
+.calprogress { height: 3px; background: var(--border-soft); border-radius: 2px;
+               overflow: hidden; margin: 18px 0; }
+.calprogress i { display: block; height: 100%; background: var(--good);
+                 transition: width 200ms linear; }
+/* Block so anything after it (the Cancel button) starts on its own line
+   rather than flowing alongside the inline-flex list. */
+.checklist { display: flex; flex-direction: column; gap: 7px; text-align: left;
+             margin: 6px auto 16px; width: max-content; max-width: 100%; }
+.check { display: flex; align-items: center; gap: 9px; font-size: 13px;
+         color: var(--text-faint); transition: color var(--ease); }
+.check .box { width: 15px; text-align: center; }
+.check.done { color: var(--good); }
+.check.miss { color: var(--text-faint); }
+
+@media (max-width: 1180px) {
+  .live { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto auto; }
+  .live .side { grid-column: 1; grid-row: 3; }
+  .live .strip { grid-column: 1; grid-row: 2; }
+}
+@media (max-width: 860px) {
+  .body { grid-template-columns: var(--sidebar-w-collapsed) 1fr; }
+  .navitem .lbl { display: none; }
+  .navitem { justify-content: center; }
+}

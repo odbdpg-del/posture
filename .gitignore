@@ -1,0 +1,25 @@
+# Virtualenv and bytecode
+.venv/
+__pycache__/
+*.pyc
+
+# The pose model is 5.6 MB and reproducible: scripts/fetch_model.py fetches it.
+models/*.task
+
+# Test and tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Local state. The app keeps config and stats in ~/.posture, but --config and
+# stats.path can point anywhere, and neither belongs in version control:
+# baselines are measurements of one person's body, and the database is a record
+# of how they sat all day.
+*.db
+*.db-wal
+*.db-shm
+/config.json
+*.log
+
+# Editors
+.vscode/
+.idea/
