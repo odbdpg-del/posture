@@ -275,6 +275,28 @@ class CalibrationSession:
                 continue
             metrics[spec.key] = summary
 
+            # A one-sided metric measures you against your own baseline, so a
+            # baseline captured somewhere a neutral posture cannot reach makes
+            # the metric permanently angry: sitting normally reads as a
+            # deviation, and no amount of sitting up ever clears it.
+            #
+            # Seen in the wild. A torso lean baseline of -15.9 degrees -- taken
+            # while reclining -- put an upright torso 15.9 past baseline
+            # against a 7 degree tolerance, so the posture score sat near zero
+            # all day and blamed torso lean while the person sat perfectly
+            # straight. Nothing else in the app can notice this: a reclining
+            # torso is a physically plausible reading, so no guard rejects it,
+            # and the spread was tight, so the baseline looked high quality.
+            drift = met.signed_excess(spec, spec.neutral, summary.centre)
+            if drift > spec.min_tolerance:
+                problems.append(
+                    f"{spec.label}: baseline of {summary.centre:.1f} is far enough "
+                    f"from neutral ({spec.neutral:.0f} {spec.unit}) that sitting "
+                    f"neutrally reads {drift:.1f} past it, beyond the "
+                    f"{spec.min_tolerance:.0f} tolerance -- so normal posture will "
+                    "always look wrong. Recalibrate sitting the way you want to sit."
+                )
+
         if self._frames and self._usable / self._frames < 0.5:
             problems.append(
                 f"only {self._usable} of {self._frames} frames were usable -- "

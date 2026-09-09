@@ -202,6 +202,20 @@ the second failed *flatteringly* — neck tilt only counts upward deviation as
 bad, so a reading of −149° produced zero excess and a confident score of 100
 over an empty chair.
 
+**The front metrics need you to be facing the front camera.** All three divide
+by a horizontal span, and turning away foreshortens it: the horizontal
+separation of the shoulders collapses toward zero while the vertical offset
+between them does not, so `arctan2(dy, |dx|)` swings toward ±90° on a body that
+has not moved. Measuring the straight-line distance between the shoulders does
+*not* catch this — that distance stays healthy precisely because of the vertical
+offset causing the trouble. Found live: shoulder tilt −52° and head roll −59°
+against a 4° tolerance, from someone who had turned to talk to somebody. So the
+gate is on the horizontal spread as a fraction of the shoulder span, which is
+the same number as the reported tilt angle, and it drops all three metrics at
+once rather than only the angle that shows the problem worst. It bounds the
+damage rather than detecting the turn: in a projection, "turned 80°" and
+"shoulders genuinely tilted" are the same picture.
+
 **Hips are optional.** This is a desk app, and at a desk the hips are usually
 under the desk, below the frame, or behind an armrest. So the side role has two
 tiers. Ear plus shoulder gives **neck tilt** — the ear-over-shoulder angle from
@@ -209,6 +223,17 @@ vertical, which is the forward-head signal and the thing desk posture is mostly
 about. A visible hip adds neck flexion, forward head and torso lean on top. Only
 the shoulder is ever required, and a bad hip discards the torso metrics without
 touching neck tilt, which was measured from landmarks the hip never touched.
+
+**A baseline has to be somewhere neutral posture can reach.** One-sided metrics
+measure you against your own baseline, so calibrating in a posture you will not
+hold makes the metric permanently angry — sitting normally reads as a deviation
+and no amount of sitting up ever clears it. Found live: a torso lean baseline of
+−15.9°, captured while reclining, put an upright torso 15.9° past baseline
+against a 7° tolerance, so the score sat near zero all day and blamed torso lean
+while the person sat straight. Nothing else can catch it — a reclining torso is
+physically plausible, and the spread was tight, so the baseline looked like a
+good one. Calibration now checks whether the metric's neutral value would itself
+be out of tolerance against the baseline it just captured, and says so.
 
 **Direction matters.** Neck flexion is only bad when it *drops*; forward head
 and torso lean only when they *rise*. Shoulder tilt, head roll and lateral
