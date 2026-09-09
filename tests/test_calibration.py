@@ -262,3 +262,40 @@ class TestToleranceCeiling:
                 base = cal.MetricBaseline(spec.key, 0.0, spread, 50)
                 tol = base.tolerance(spec, multiplier=3.0)
                 assert spec.min_tolerance <= tol <= spec.max_tolerance
+
+
+class TestFailuresExplainThemselves:
+    """"0 usable samples" is a symptom. The frames that produced it already
+    carry the cause, and dropping it left the panel saying what happened but
+    nothing about what to do -- the exact case seen live, where a side camera
+    could not see the hips and three metrics failed with no hint why."""
+
+    def sample(self, t, **kw):
+        return met.MetricSample(role="side", t=t, person=True, camera_index=0,
+                                values={"neck_tilt": 5.0}, **kw)
+
+    def test_the_reason_reaches_the_problem_list(self):
+        note = "hips not in frame; torso metrics unavailable"
+        _b, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, missing=("left_hip", "right_hip"), notes=(note,))
+            for i in range(60)])
+        assert problems, "three hip metrics could not calibrate"
+        assert all(note in p for p in problems)
+
+    def test_metrics_that_did_calibrate_are_not_annotated(self):
+        note = "hips not in frame; torso metrics unavailable"
+        baseline, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, notes=(note,)) for i in range(60)])
+        assert "neck_tilt" in baseline.metrics
+        assert not any("Neck tilt:" in p for p in problems)
+
+    def test_no_note_means_no_dangling_dashes(self):
+        _b, problems = cal.build_baseline(0, "side",
+                                      [self.sample(i * 0.2) for i in range(60)])
+        assert problems and not any(p.rstrip().endswith("--") for p in problems)
+
+    def test_one_reason_not_fifty_copies_of_it(self):
+        note = "hips not in frame; torso metrics unavailable"
+        _b, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, notes=(note,)) for i in range(60)])
+        assert all(p.count(note) <= 1 for p in problems)

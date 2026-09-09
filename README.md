@@ -216,6 +216,22 @@ once rather than only the angle that shows the problem worst. It bounds the
 damage rather than detecting the turn: in a projection, "turned 80°" and
 "shoulders genuinely tilted" are the same picture.
 
+**The landmarks jitter, so the metrics are smoothed before anything judges
+them.** Measured on a real side camera at two samples a second, neck tilt read
++13.4, −0.1, +0.6, +19.4, +4.8, +17.8, +6.3, +28.1 — on a person the detector
+called `good` the whole time. A neck does not do that; the ear landmark was
+moving, not the ear. The angle amplifies it, because ear-to-shoulder is the
+shortest segment the app measures, and on a desk camera it is often the *only*
+side metric available — so the noisiest measurement carries that camera alone.
+The detector's 60-second window was robust to it, but the ratio, the score and
+the number on the panel all read the newest sample: over one 75-second stretch
+the score wandered between 57 and 86 without the posture changing band once. A
+1.5-second rolling **median** fixes it — median rather than mean, because jitter
+arrives as spikes and a mean drags toward them. The window is in seconds, not
+samples, since adaptive sampling changes the rate underneath it. It runs in the
+worker ahead of both the detector and calibration, so a baseline is measured
+from the same signal it is later judged against.
+
 **Hips are optional.** This is a desk app, and at a desk the hips are usually
 under the desk, below the frame, or behind an armrest. So the side role has two
 tiers. Ear plus shoulder gives **neck tilt** — the ear-over-shoulder angle from

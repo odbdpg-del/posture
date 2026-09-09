@@ -22,6 +22,7 @@ nobody supervises.
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -193,6 +194,11 @@ class CalibrationSession:
         # wall clock behind its back.
         self._now: float | None = None
         self._values: dict[str, list[float]] = {}
+        # Why frames were not usable, counted. "0 usable samples" is a symptom;
+        # the sample that produced it already carries the cause, and throwing
+        # that away left the panel telling people what had happened but not one
+        # word about what to do next.
+        self._notes: Counter[str] = Counter()
         self._frames = 0
         self._usable = 0
 
@@ -201,6 +207,7 @@ class CalibrationSession:
         self.finished_at = None
         self._now = self.started_at
         self._values.clear()
+        self._notes.clear()
         self._frames = self._usable = 0
 
     @property
@@ -233,6 +240,8 @@ class CalibrationSession:
             self._usable += 1
         for key, value in sample.values.items():
             self._values.setdefault(key, []).append(value)
+        for note in sample.notes:
+            self._notes[note] += 1
         if self.elapsed(now) >= self.duration:
             self.finished_at = self.started_at + self.duration
 
@@ -255,6 +264,17 @@ class CalibrationSession:
     def counts(self) -> dict[str, int]:
         return {k: len(v) for k, v in self._values.items()}
 
+    def commonest_note(self) -> str:
+        """The reason the frames gave most often, or "" if they gave none.
+
+        One reason rather than all of them: they are overwhelmingly the same
+        note repeated for every frame of the capture, and a list of fifty
+        identical strings is not more informative than one.
+        """
+        if not self._notes:
+            return ""
+        return self._notes.most_common(1)[0][0]
+
     def result(self) -> tuple[Baseline, list[str]]:
         """Build the baseline, plus a list of human-readable problems.
 
@@ -271,6 +291,7 @@ class CalibrationSession:
                 problems.append(
                     f"{spec.label}: only {len(values)} usable sample(s), "
                     f"need {self.min_samples}"
+                    + (f" -- {self.commonest_note()}" if self.commonest_note() else "")
                 )
                 continue
             metrics[spec.key] = summary

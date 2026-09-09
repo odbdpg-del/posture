@@ -33,6 +33,7 @@ from .capture import CameraCapture, CameraOpenError
 from .config import CameraConfig, Config, retains_frames
 from .devices import describe
 from .pose import PoseEstimator
+from .smoothing import SampleSmoother
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +139,9 @@ class CameraWorker:
         # behaviour the rest of the app assumes.
         self._preview_lock = threading.Lock()
         self._preview: tuple = ()
+        # Ahead of both the detector and calibration, so a baseline is measured
+        # from the same signal it will later be judged against.
+        self._smoother = SampleSmoother()
         self.state = CameraState(
             index=cam.index, role=cam.role, name=cam.name or describe(cam.index),
             enabled=cam.enabled,
@@ -250,8 +254,9 @@ class CameraWorker:
                     continue
 
                 result = estimator.detect(frame.image, int(frame.t * 1000))
-                sample = met.compute(self.cam.role, result.array, frame.aspect,
-                                     thresh, frame.t, camera_index=self.cam.index)
+                sample = self._smoother.add(met.compute(
+                    self.cam.role, result.array, frame.aspect, thresh, frame.t,
+                    camera_index=self.cam.index))
 
                 if not sample.person:
                     state = NO_PERSON
