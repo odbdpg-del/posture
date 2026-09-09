@@ -126,7 +126,11 @@ class TestBuildBaseline:
         baseline, problems = cal.build_baseline(0, "side",
                                                 side_samples(4, torso_lean=3.0))
         assert baseline.metrics == {}
-        assert len(problems) >= 3
+        # One message per cause, not one per metric: four metrics failing for
+        # the same reason is one fact about the capture, not four faults.
+        assert len(problems) == 1
+        for label in ("Neck tilt", "Neck flexion", "Forward head", "Torso lean"):
+            assert label in problems[0]
 
     def test_unusable_frames_are_flagged(self):
         """Being out of frame for most of calibration must be reported."""
@@ -262,3 +266,49 @@ class TestToleranceCeiling:
                 base = cal.MetricBaseline(spec.key, 0.0, spread, 50)
                 tol = base.tolerance(spec, multiplier=3.0)
                 assert spec.min_tolerance <= tol <= spec.max_tolerance
+
+
+class TestFailuresExplainThemselves:
+    """"0 usable samples" is a symptom. The frames that produced it already
+    carry the cause, and dropping it left the panel saying what happened but
+    nothing about what to do -- the exact case seen live, where a side camera
+    could not see the hips and three metrics failed with no hint why."""
+
+    def sample(self, t, **kw):
+        return met.MetricSample(role="side", t=t, person=True, camera_index=0,
+                                values={"neck_tilt": 5.0}, **kw)
+
+    def test_the_reason_reaches_the_problem_list(self):
+        note = "hips not in frame; torso metrics unavailable"
+        _b, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, missing=("left_hip", "right_hip"), notes=(note,))
+            for i in range(60)])
+        assert len(problems) == 1, "three metrics, one cause, one message"
+        assert note in problems[0]
+
+    def test_a_cause_with_a_fix_carries_the_fix(self):
+        """A message that says only what went wrong leaves the person exactly
+        where they were. The hip case has a concrete answer, so it says it."""
+        note = "hips not in frame; torso metrics unavailable"
+        _b, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, notes=(note,)) for i in range(60)])
+        assert "ear to hip" in problems[0]
+        assert "Neck tilt does not need a hip" in problems[0]
+
+    def test_metrics_that_did_calibrate_are_not_annotated(self):
+        note = "hips not in frame; torso metrics unavailable"
+        baseline, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, notes=(note,)) for i in range(60)])
+        assert "neck_tilt" in baseline.metrics
+        assert not any("Neck tilt:" in p for p in problems)
+
+    def test_no_note_means_no_dangling_dashes(self):
+        _b, problems = cal.build_baseline(0, "side",
+                                      [self.sample(i * 0.2) for i in range(60)])
+        assert problems and not any(p.rstrip().endswith("--") for p in problems)
+
+    def test_one_reason_not_fifty_copies_of_it(self):
+        note = "hips not in frame; torso metrics unavailable"
+        _b, problems = cal.build_baseline(0, "side", [
+            self.sample(i * 0.2, notes=(note,)) for i in range(60)])
+        assert all(p.count(note) <= 1 for p in problems)

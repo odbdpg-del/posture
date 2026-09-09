@@ -26,13 +26,14 @@ from . import metrics as met
 from . import score as scoring
 from .history import History
 from .notify import Notifier
-from .overlay_window import OverlayWindow
+from .overlay_window import OverlayView, OverlayWindow
 from .store import Store
 from .calibration import Baseline, CalibrationSession
 from .capture import CameraCapture, CameraOpenError
 from .config import CameraConfig, Config, retains_frames
 from .devices import describe
 from .pose import PoseEstimator
+from .smoothing import SampleSmoother
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +113,8 @@ class CameraState:
                 }
                 for spec in met.SPECS_BY_ROLE.get(self.role, ())
             ],
+            "confidence": ({k: round(v, 3) for k, v in sample.confidence.items()}
+                           if sample else {}),
             "missing": list(sample.missing) if sample else [],
             "notes": list(sample.notes) if sample else [],
             "near_side": sample.near_side if sample else None,
@@ -138,6 +141,9 @@ class CameraWorker:
         # behaviour the rest of the app assumes.
         self._preview_lock = threading.Lock()
         self._preview: tuple = ()
+        # Ahead of both the detector and calibration, so a baseline is measured
+        # from the same signal it will later be judged against.
+        self._smoother = SampleSmoother()
         self.state = CameraState(
             index=cam.index, role=cam.role, name=cam.name or describe(cam.index),
             enabled=cam.enabled,
@@ -250,8 +256,9 @@ class CameraWorker:
                     continue
 
                 result = estimator.detect(frame.image, int(frame.t * 1000))
-                sample = met.compute(self.cam.role, result.array, frame.aspect,
-                                     thresh, frame.t, camera_index=self.cam.index)
+                sample = self._smoother.add(met.compute(
+                    self.cam.role, result.array, frame.aspect, thresh, frame.t,
+                    camera_index=self.cam.index))
 
                 if not sample.person:
                     state = NO_PERSON
@@ -291,7 +298,7 @@ class CameraWorker:
 
                 session = self._calibration
                 if session is not None and session.running:
-                    session.add(sample)
+                    session.add(sample, landmarks=preview)
                 if self._on_sample is not None:
                     self._on_sample(sample)
         finally:
@@ -406,7 +413,8 @@ class Monitor:
             # Score and history are derived views of the verdict, updated here
             # so every sample is reflected exactly once. Both are read-only to
             # everything downstream.
-            self._score = scoring.score_verdict(verdict)
+            self._score = scoring.score_verdict(
+                verdict, self._detector.settings.bad_fraction)
             self.history.record(self._score.value, verdict.state, verdict)
             self._alert_state = self._alerts.update(verdict)
             events = self._alerts.drain()
@@ -485,6 +493,16 @@ class Monitor:
                     self._notifier = Notifier()
                 self._notifier.send(event.state.headline or "Fix your posture",
                                     event.state.detail)
+            elif event.kind == "stood_down" and cfg.os_notifications:
+                # The window vanishing with no explanation would read as a
+                # glitch, and the thing worth saying is not "you are fine" --
+                # it is that the app was asking for something unreachable and
+                # has stopped. Silence here would leave the underlying problem
+                # to be rediscovered the next time it escalates.
+                if self._notifier is None:
+                    self._notifier = Notifier()
+                self._notifier.send("Posture alert stood down",
+                                    self._stand_down_detail())
 
         if not cfg.fullscreen_overlay:
             if self._overlay is not None:
@@ -498,12 +516,58 @@ class Monitor:
             return
         if want and not self._overlay.visible:
             self._overlay.show(state.headline, state.detail,
-                               state.hold_required, state.hold_remaining)
+                               state.hold_required, state.hold_remaining,
+                               self._overlay_view())
         elif want:
             self._overlay.update(state.headline, state.detail,
-                                 state.hold_required, state.hold_remaining)
+                                 state.hold_required, state.hold_remaining,
+                                 self._overlay_view())
         elif self._overlay.visible:
             self._overlay.hide()
+
+    def _stand_down_detail(self) -> str:
+        """Why the overlay gave up, in terms the person can act on."""
+        suspect = self._verdict.suspect
+        if suspect:
+            return (f"{', '.join(suspect)} cannot be satisfied by any normal "
+                    "posture -- the baseline was captured somewhere you do not "
+                    "sit. Recalibrate to start scoring it again.")
+        return ("It was asking for a posture that never arrived in ten minutes. "
+                "Check the camera still sees you the way it did at calibration, "
+                "and recalibrate if it has moved.")
+
+    def _overlay_view(self) -> OverlayView:
+        """The figure and tracking state the overlay should draw.
+
+        Landmarks only. Which camera they come from matters when there are two:
+        the one whose role owns the metric being complained about is the one
+        you have to get back in front of, so it wins even if it has lost sight
+        of you -- that is exactly the state worth showing. Otherwise any camera
+        that can currently see you will do.
+        """
+        with self._lock:
+            workers = list(self._workers)
+            verdict = self._verdict
+            thresh = self.cfg.sampling.visibility_threshold
+        if not workers:
+            return OverlayView(state=verdict.state, reason=verdict.reason)
+
+        roles = {met.SPEC_BY_KEY[k].role for k in verdict.offenders
+                 if k in met.SPEC_BY_KEY}
+        chosen = next((w for w in workers if w.cam.role in roles), None)
+        if chosen is None:
+            chosen = next((w for w in workers
+                           if w.state.state in (TRACKING, PARTIAL)), workers[0])
+
+        cam = chosen.state
+        size = cam.size
+        return OverlayView(
+            landmarks=tuple(tuple(lm) for lm in cam.landmarks),
+            thresh=thresh,
+            aspect=(size[0] / size[1]) if size and size[1] else 4 / 3,
+            state=verdict.state,
+            reason=verdict.reason,
+        )
 
     def snooze(self, seconds: float | None = None) -> dict:
         """Suppress alerts for a fixed stretch. Explicit and time-boxed."""
@@ -671,6 +735,7 @@ def _settings(cfg: Config) -> det.DetectionSettings:
         exit_ratio=d.exit_ratio, absence_seconds=d.absence_seconds,
         tolerance_multiplier=d.tolerance_multiplier,
         min_window_fill=d.min_window_fill, overrides=dict(d.overrides),
+        min_confidence=d.min_confidence,
     )
 
 

@@ -93,6 +93,9 @@ class DetectionConfig:
     absence_seconds: float = 15.0
     tolerance_multiplier: float = 3.0
     min_window_fill: float = 0.30
+    # Confidence a metric needs before it may raise an alert. Below this it is
+    # still measured and still shown, faded; it just does not interrupt you.
+    min_confidence: float = 0.75
     # Per-metric tolerance overrides, by metric key. Empty means "derive it
     # from my calibration", which is the intended way round.
     overrides: dict[str, float] = field(default_factory=dict)

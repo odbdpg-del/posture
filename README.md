@@ -27,6 +27,10 @@ Platform assumed: **Windows 11** (from the environment this was built on; the
 brief left it blank). Nothing is Windows-specific except the camera backend
 order in `capture.py`, which already falls through to a portable default.
 
+Double-clicking `start-posture.bat` does the whole of this section and then
+starts the app, so the two steps below are only worth running by hand if you
+want the dev dependencies as well, or you are not on Windows.
+
 ```bash
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ```
@@ -36,6 +40,14 @@ python -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements-
 ```
 
 ## Run it
+
+Double-click **`start-posture.bat`**. On a fresh machine the first run builds
+the virtual environment and downloads the pose model, which takes a few
+minutes; after that it goes straight to the app. It passes any flags through,
+so `start-posture.bat --diagnose` works too, and it keeps its window open with
+the reason if a step fails rather than closing before you can read it.
+
+Or, equivalently:
 
 ```bash
 .venv/Scripts/python.exe -m posture
@@ -190,6 +202,36 @@ the second failed *flatteringly* — neck tilt only counts upward deviation as
 bad, so a reading of −149° produced zero excess and a confident score of 100
 over an empty chair.
 
+**The front metrics need you to be facing the front camera.** All three divide
+by a horizontal span, and turning away foreshortens it: the horizontal
+separation of the shoulders collapses toward zero while the vertical offset
+between them does not, so `arctan2(dy, |dx|)` swings toward ±90° on a body that
+has not moved. Measuring the straight-line distance between the shoulders does
+*not* catch this — that distance stays healthy precisely because of the vertical
+offset causing the trouble. Found live: shoulder tilt −52° and head roll −59°
+against a 4° tolerance, from someone who had turned to talk to somebody. So the
+gate is on the horizontal spread as a fraction of the shoulder span, which is
+the same number as the reported tilt angle, and it drops all three metrics at
+once rather than only the angle that shows the problem worst. It bounds the
+damage rather than detecting the turn: in a projection, "turned 80°" and
+"shoulders genuinely tilted" are the same picture.
+
+**The landmarks jitter, so the metrics are smoothed before anything judges
+them.** Measured on a real side camera at two samples a second, neck tilt read
++13.4, −0.1, +0.6, +19.4, +4.8, +17.8, +6.3, +28.1 — on a person the detector
+called `good` the whole time. A neck does not do that; the ear landmark was
+moving, not the ear. The angle amplifies it, because ear-to-shoulder is the
+shortest segment the app measures, and on a desk camera it is often the *only*
+side metric available — so the noisiest measurement carries that camera alone.
+The detector's 60-second window was robust to it, but the ratio, the score and
+the number on the panel all read the newest sample: over one 75-second stretch
+the score wandered between 57 and 86 without the posture changing band once. A
+1.5-second rolling **median** fixes it — median rather than mean, because jitter
+arrives as spikes and a mean drags toward them. The window is in seconds, not
+samples, since adaptive sampling changes the rate underneath it. It runs in the
+worker ahead of both the detector and calibration, so a baseline is measured
+from the same signal it is later judged against.
+
 **Hips are optional.** This is a desk app, and at a desk the hips are usually
 under the desk, below the frame, or behind an armrest. So the side role has two
 tiers. Ear plus shoulder gives **neck tilt** — the ear-over-shoulder angle from
@@ -197,6 +239,26 @@ vertical, which is the forward-head signal and the thing desk posture is mostly
 about. A visible hip adds neck flexion, forward head and torso lean on top. Only
 the shoulder is ever required, and a bad hip discards the torso metrics without
 touching neck tilt, which was measured from landmarks the hip never touched.
+
+**A baseline has to be somewhere neutral posture can reach.** One-sided metrics
+measure you against your own baseline, so calibrating in a posture you will not
+hold makes the metric permanently angry — sitting normally reads as a deviation
+and no amount of sitting up ever clears it. Found live: a torso lean baseline of
+−15.9°, captured while reclining, put an upright torso 15.9° past baseline
+against a 7° tolerance, so the score sat near zero all day and blamed torso lean
+while the person sat straight. Nothing else can catch it — a reclining torso is
+physically plausible, and the spread was tight, so the baseline looked like a
+good one. Calibration now checks whether the metric's neutral value would itself
+be out of tolerance against the baseline it just captured, and says so. The
+detector applies the same test to baselines already stored, since the ones that
+matter were captured before the check existed.
+
+**Alerts report, they do not diagnose.** The app measures you against a
+baseline you set. It does not know whether your posture is healthy, so it says
+*"Neck tilt and forward head away from baseline for 3m 19s"* rather than naming
+a body part as a fault. A test pins that: the headline has to carry the word
+*baseline* and a duration, and must not contain *fix your*, *bad posture* or
+*poor*.
 
 **Direction matters.** Neck flexion is only bad when it *drops*; forward head
 and torso lean only when they *rise*. Shoulder tilt, head roll and lateral
@@ -365,9 +427,41 @@ outright: there is nobody to nag, and an alert left running would ambush you
 when you sat back down. An unreadable frame freezes the timers instead — we do
 not know whether you fixed it, so we neither escalate nor hand out credit.
 
+**The overlay shows you what it can see.** Freezing the timers is honest but,
+on its own, invisible: a countdown that has stopped moving looks exactly like
+one that has decided your posture is wrong, and sitting up straighter does
+nothing to clear it. So the window draws the live figure — landmark positions
+only, never a frame, because this window covers whatever is being screen-shared
+at the time — and says which it is: *Holding, 3s to go*, *Sit back to your
+calibrated posture*, or *Cannot see your right shoulder — the hold is paused
+until you are back in view*. The figure is drawn from the camera whose role
+owns the metric being complained about, and it keeps drawing from that camera
+after it loses sight of you, since that is the one you have to get back in
+front of.
+
 **The overlay cannot trap you.** It takes itself down if nothing updates it for
 20 seconds, so unplugging the camera while it is up cannot leave a screen-
 blocking window that no posture reading is able to dismiss.
+
+That was not enough, because it only covered the window going deaf. Reported
+from a live session: *"very often this screen is almost impossible to get back
+out of"*. It was not almost impossible, it was impossible — a torso lean
+baseline of −15.9° demanded a torso reclined 8.9° past vertical before the
+metric counted as in tolerance, one permanently-flagged metric pins the state to
+`bad`, and the hold only advances on a `good` reading. Sitting up straight, the
+thing the window was asking for, could never clear it. Snooze was the only exit.
+
+So there are two defences now, because they fail differently. The detector
+**refuses to judge you against a baseline no neutral posture can reach**, which
+fixes the diagnosable case at its root and reports the metric as suspect instead
+of silently dropping it — the calibration panel says which, and the only fix is
+the button next to it. And the alert engine **stands the overlay down when the
+hold has never once started**: not "never finished", never started, meaning not
+a single good reading in ten minutes. Both conditions are needed together, and
+the discriminator matters — someone who reaches a good posture even for a moment
+has shown the target is reachable and is simply being asked to hold it, which is
+the mechanic working. The valve is a claim about the app being wrong, never a
+way to wait out the nag by sitting still and refusing.
 
 All timings, the hold, and the snooze length live in the config and are
 editable under Settings. Both effects can be switched off independently of the
@@ -425,6 +519,75 @@ sidebar, layout toggle, camera chips, camera rows and the timeline all use one
 of these two approaches. Measured after the fix: the camera list rebuilds 0
 times in 8 seconds, and the timeline 3 times in 12 rather than 24.
 
+## The biomechanics view
+
+The live panel is built to be read as a measurement instrument rather than a
+verdict. Four things carry that.
+
+**The overlay draws the geometry the app actually measures**, not a decorative
+skeleton: the ear-over-shoulder and shoulder-over-hip segments on the side
+camera, the shoulder and ear lines on the front one, the dashed vertical and
+horizontal each angle is taken from, and an arc at the vertex labelled with the
+server's own number. Its viewBox is `0 0 (100·aspect) 100` — `to_metric_frame`
+scaled by 100 — so one unit is the same length in both directions and an angle
+*drawn* is the angle *measured*. A square viewBox stretched over a 4:3 frame,
+which is what it used to be, puts the landmarks in the right place and
+everything derived from them in the wrong one.
+
+**Five overlay modes**, from `minimal` through `landmarks`, `angles` and
+`baseline comparison` to `full biomechanics`. It is a way of looking rather than
+a way of measuring — it changes nothing that is recorded — so it lives in the
+browser and is remembered there, not in the config.
+
+**Baseline comparison draws where you were sitting when you calibrated**: the
+stored neutral pose as a faint dashed figure, with a displacement line only
+where a landmark has actually moved. An arrow per point would be a hedgehog and
+would say nothing. Points the capture barely saw are left out, because a median
+of three frames is not a position.
+
+**Confidence is per metric, and it is the weakest landmark rather than the
+mean.** Averaging a confident shoulder against an extrapolated hip reports 0.8
+for a geometry that is guesswork at one end. It is per metric because it is not
+one question for the frame: on a desk camera the shoulders are solid and the
+hips are inferred, so in a single frame neck tilt can be worth acting on while
+trunk lean is not. A metric below `min_confidence` is still measured, still
+shown — faded, and flagged `LOW` — but it cannot raise an alert and it does not
+count toward the session figures. Measured badly is not the same as measured,
+and hiding it would be worse than nagging: the table would quietly shrink and
+nothing would ever say the camera had stopped seeing you properly.
+
+A metric the setup cannot produce is a row saying so, with the reason from the
+camera that should have produced it — *"cannot see right hip"* — never a blank
+and never a zero. At a desk the hips are usually out of frame, so trunk lean is
+routinely unavailable, and showing 0° for the metric people most expect to see
+would be a fabricated reading.
+
+## Session analysis
+
+The score is the worst axis at an instant. It cannot show forward head creeping
+up all morning while everything else holds — it would say "fine" until the
+moment it did not. So each metric keeps its own track, and the section under the
+cameras charts them against their baseline and tolerance band.
+
+Three numbers per metric, because a total on its own cannot separate them:
+**how long** it spent past tolerance, **what share** of the session that was,
+and the **longest continuous stretch**. Twenty minutes in one sitting is a
+different thing from the same twenty minutes in forty scattered half-minutes.
+Runs under five seconds are excluded — the same threshold, and the same
+reasoning, the episode log already uses.
+
+**Movement is described, not scored.** Sitting rigidly still in a good position
+is not the goal and is arguably worse than drifting between several reasonable
+ones, so the panel reports a variability band and position changes per hour with
+no verdict attached: what the right number is depends on the person, and the app
+does not know it. A change has to move a full tolerance *and* hold there for
+three seconds — distance alone counts jitter, dwell alone counts a slow drift
+back to where it started.
+
+Gaps are credited to nothing, everywhere. Letting an open run swallow the
+stretch where nobody was measured is the difference between "you slouched for
+twenty minutes" and "you left", and no chart draws a line across one.
+
 ## The posture score
 
 One number, derived from measurements the app already makes — never invented.
@@ -432,6 +595,22 @@ Per metric it blends *how far past tolerance you are right now* with *how much
 of the rolling window you have spent out of it*, then takes the **worst** axis
 rather than an average, matching the detector's own rule that one bad axis is
 enough. Bands: 85+ excellent, 70+ good, 50+ fair, below that needs correction.
+
+**The score may not contradict the verdict it comes from.** The blend alone did
+not manage that: any ratio at or past the floor maxes the instantaneous term, so
+a single wild reading cost 60 points whatever the window said. Found live — a
+metric out of tolerance for half its window scored 19, *needs correction*, while
+the detector's own state was `good` and no alert was firing, because the
+detector will not call a metric bad until it has been out for `bad_fraction`
+(70%) of the window. So the blend is capped by how much of the window supports
+it, anchored to the bands the panel actually shows: with nothing in the window
+behind it a deviation may dent the score but not push it out of *good*; at the
+detector's own threshold it may reach the floor of *fair* but not cross into
+*needs correction*; past that the detector agrees, the cap lifts, and the score
+is free to bottom out. A metric the detector has flagged is never capped at all.
+The cap makes the score plateau once a deviation outruns its evidence, which is
+the point — how far out you are right now is worth something, but not more than
+the window will vouch for.
 
 There is deliberately **no score** when nobody is at the desk, when the
 landmarks cannot be read, or before calibration. A confident 100 over an empty

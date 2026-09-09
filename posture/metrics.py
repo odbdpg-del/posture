@@ -57,6 +57,38 @@ MIN_SCALE = 0.02
 # sub-pixel noise, so we refuse to report it rather than report garbage.
 MIN_EAR_SEPARATION_RATIO = 0.15
 
+# How face-on you have to be before the front metrics mean anything, as the
+# fraction of the shoulder span that is actually horizontal in the image --
+# cos(turn) for a level pair of shoulders.
+#
+# The front metrics all assume you are facing the camera. Turn away and the
+# shoulder pair foreshortens: the horizontal separation collapses toward zero
+# while the vertical offset between the two shoulders does not, so
+# ``arctan2(dy, |dx|)`` swings toward +/-90 on a body that has not moved.
+# MIN_SCALE does not catch this. It guards the straight-line distance between
+# the shoulders, and that distance stays healthy precisely because of the
+# vertical offset causing the trouble -- at 85 degrees of turn it still reads
+# 0.038 against a limit of 0.02.
+#
+# Not hypothetical. Measured on a real camera: shoulder tilt -52 degrees and
+# head roll -59 against a 4-degree tolerance, from someone who had turned to
+# talk to somebody. The detector was right not to alert -- the deviation was
+# not sustained -- but the posture score reads the instantaneous ratio, so the
+# headline number dropped to 19 out of 100 and stayed there.
+#
+# Since |shoulder_tilt| is exactly arccos(directness), this doubles as the
+# plausibility cap the side metrics already have -- 0.866 bounds the reported
+# tilt at 30 degrees. That is 2.5x the largest tolerance the metric can be
+# given (max_tolerance is 12) so it cannot suppress a tilt worth flagging,
+# while sitting far below the readings a turn produces.
+#
+# It bounds the damage rather than detecting the turn: this is a projection, so
+# "turned 80 degrees" and "shoulders genuinely tilted" are the same picture,
+# and nothing in a single shoulder pair can separate them. A moderate turn
+# still inflates the reading somewhat -- it just can no longer reach the
+# absurd values that were reaching the score.
+MIN_FACING_DIRECTNESS = 0.866
+
 # How far the torso may tilt from vertical before we stop believing the
 # landmarks. A person leaning hard over a desk reaches maybe 45 degrees; past
 # 60 the shoulder is barely above the hip at all.
@@ -120,6 +152,12 @@ class MetricSpec:
     # anything is said. Lower it to make a metric complain sooner.
     max_tolerance: float
     description: str
+    # The anatomically neutral value: ear over shoulder, torso vertical,
+    # shoulders level. Not a target -- the app judges you against your own
+    # calibrated baseline, not against an ideal -- but calibration needs it to
+    # notice that a baseline has been captured somewhere a neutral posture
+    # cannot reach. See ``CalibrationSession.result``.
+    neutral: float = 0.0
 
 
 SPECS: tuple[MetricSpec, ...] = (
@@ -138,6 +176,7 @@ SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
         "neck_flexion", "side", "Neck flexion", "neck", "deg", LOW_IS_BAD, 8.0, 15.0,
         "Ear-shoulder-hip angle. 180 is a perfectly stacked head; smaller is more slouched.",
+        neutral=180.0,
     ),
     MetricSpec(
         "forward_head", "side", "Forward head", "fwdhd", "x torso", HIGH_IS_BAD, 0.08, 0.25,
@@ -170,6 +209,23 @@ SPECS_BY_ROLE: dict[str, tuple[MetricSpec, ...]] = {
     role: tuple(s for s in SPECS if s.role == role) for role in ("side", "front")
 }
 SPEC_BY_KEY: dict[str, MetricSpec] = {s.key: s for s in SPECS}
+
+
+def neutral_shortfall(spec: MetricSpec, baseline: float, tolerance: float) -> float:
+    """How far past ``tolerance`` a neutral posture sits against this baseline.
+
+    Positive means the metric cannot be satisfied by sitting neutrally: the
+    baseline was captured somewhere an ordinary posture cannot reach, so the
+    metric is out of tolerance no matter how well you sit. A baseline of -15.9
+    degrees of torso lean -- taken while reclining -- puts an upright torso
+    15.9 past it against a 7 degree tolerance, and nothing you do at a desk
+    will ever clear it.
+
+    Used in two places, which is why it lives here rather than in either of
+    them: calibration reports it as a problem with the baseline it has just
+    captured, and the detector refuses to judge you against one.
+    """
+    return signed_excess(spec, spec.neutral, baseline) - tolerance
 
 
 def signed_excess(spec: MetricSpec, value: float, baseline: float) -> float:
@@ -205,6 +261,13 @@ class MetricSample:
     facing: int | None = None
     near_side: str | None = None
     notes: tuple[str, ...] = ()
+    # Per-metric confidence, 0..1, keyed like ``values``. How much the model
+    # trusts the landmarks *this particular metric* rests on, which is not the
+    # same question for all of them: on a desk camera the shoulders are usually
+    # solid while the hips are guesswork, so torso lean can be far shakier than
+    # neck tilt in the very same frame. Reporting one number for the frame
+    # would average that distinction away.
+    confidence: dict[str, float] = field(default_factory=dict)
     # Which camera produced this. The detector compares each camera against its
     # own baseline, so a sample has to carry its origin with it.
     camera_index: int = 0
@@ -254,6 +317,40 @@ def _pick_near_side(arr: np.ndarray, thresh: float) -> tuple[str | None, tuple[s
     if not _visible(arr, shoulder, thresh):
         return None, best_missing
     return best_side, best_missing
+
+
+def _weakest(arr: np.ndarray, *indices: int) -> float:
+    """Confidence in a measurement built from these landmarks.
+
+    The minimum, not the mean. A geometry is exactly as trustworthy as its
+    worst-seen corner: averaging a confident shoulder against an invented hip
+    reports a comfortable 0.8 for a number that is entirely guesswork at one
+    end.
+    """
+    return float(min(arr[i, 3] for i in indices))
+
+
+def _side_confidence(arr: np.ndarray, values: dict[str, float],
+                     ear: int, shoulder: int, hip: int) -> dict[str, float]:
+    """Which landmarks each side metric actually rests on."""
+    needs = {
+        "neck_tilt": (ear, shoulder),
+        "torso_lean": (shoulder, hip),
+        "neck_flexion": (ear, shoulder, hip),
+        "forward_head": (ear, shoulder, hip),
+    }
+    return {key: _weakest(arr, *idx) for key, idx in needs.items() if key in values}
+
+
+def _front_confidence(arr: np.ndarray, values: dict[str, float]) -> dict[str, float]:
+    ls, rs = lmk.LEFT_SHOULDER, lmk.RIGHT_SHOULDER
+    le, re = lmk.LEFT_EAR, lmk.RIGHT_EAR
+    needs = {
+        "shoulder_tilt": (ls, rs),
+        "head_roll": (le, re),
+        "lateral_offset": (le, re, ls, rs),
+    }
+    return {key: _weakest(arr, *idx) for key, idx in needs.items() if key in values}
 
 
 def _facing(arr: np.ndarray, pts: np.ndarray, ear_idx: int, thresh: float) -> int | None:
@@ -327,6 +424,7 @@ def compute_side(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) ->
             "side", t, True, values=values, missing=missing, scale=scale,
             scale_kind=scale_kind, facing=facing, near_side=near_side,
             notes=tuple(notes),
+            confidence=_side_confidence(arr, values, ear_i, sh_i, hip_i),
         )
 
     hip = pts[hip_i]
@@ -357,7 +455,7 @@ def compute_side(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) ->
     return MetricSample(
         "side", t, True, values=values, missing=missing, scale=scale,
         scale_kind=scale_kind, facing=facing, near_side=near_side,
-        notes=tuple(notes),
+        notes=tuple(notes), confidence=_side_confidence(arr, values, ear_i, sh_i, hip_i),
     )
 
 
@@ -377,12 +475,23 @@ def compute_front(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) -
         return MetricSample("front", t, True, scale=scale, scale_kind="shoulders",
                             notes=tuple(notes))
 
+    # Every front metric divides by a horizontal span that a turn collapses, so
+    # the gate is on all three rather than on the angle that shows it worst.
+    # Reporting a lateral offset normalized by a foreshortened shoulder span
+    # would be the same error one step further on.
+    spread = abs(rs[0] - ls[0])
+    if spread < MIN_FACING_DIRECTNESS * scale:
+        notes.append("not facing the camera squarely enough to read "
+                     "the front metrics (are you turned?)")
+        return MetricSample("front", t, True, scale=scale, scale_kind="shoulders",
+                            notes=tuple(notes))
+
     values: dict[str, float] = {}
     # Measured as "how much higher is the right end than the left" against the
     # horizontal separation, rather than as a directed line angle. Written this
     # way the sign means the same thing whether or not the feed is mirrored,
     # and it never wraps near +/-180.
-    values["shoulder_tilt"] = float(np.degrees(np.arctan2(rs[1] - ls[1], abs(rs[0] - ls[0]))))
+    values["shoulder_tilt"] = float(np.degrees(np.arctan2(rs[1] - ls[1], spread)))
 
     ears = (lmk.LEFT_EAR, lmk.RIGHT_EAR)
     ear_missing = tuple(lmk.NAMES[i] for i in ears if not _visible(arr, i, vis_thresh))
@@ -404,6 +513,7 @@ def compute_front(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) -
     return MetricSample(
         "front", t, True, values=values, missing=missing, scale=scale,
         scale_kind="shoulders", notes=tuple(notes),
+        confidence=_front_confidence(arr, values),
     )
 
 

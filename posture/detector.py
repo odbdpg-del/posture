@@ -66,6 +66,13 @@ class DetectionSettings:
     # A window with less than this fraction of its nominal sample count is too
     # sparse to judge; prevents a verdict from three samples after a restart.
     min_window_fill: float = 0.30
+    # Confidence below which a metric is reported but not acted on. Landmarks
+    # already have to clear the visibility threshold before a metric is
+    # computed at all, so this is the second, stricter gate: enough to measure
+    # is not the same as enough to interrupt someone over. The panel fades a
+    # reading below this and says so rather than hiding it, because "we can see
+    # this badly" is information too.
+    min_confidence: float = 0.75
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,14 @@ class MetricVerdict:
     ceiling: float = 0.0
     derived: float | None = None   # multiplier * spread, before clamping
     source: str = "learned"        # learned | floored | capped | manual
+    # True when a neutral posture is still out of tolerance against this
+    # baseline, so the metric can never be satisfied however well you sit.
+    unreachable: bool = False
+    # How much the model trusts the landmarks this metric rests on, and whether
+    # that was enough to act on. Low confidence never suppresses the reading,
+    # only the alert.
+    confidence: float | None = None
+    low_confidence: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -105,6 +120,9 @@ class MetricVerdict:
             "ceiling": round(self.ceiling, 3),
             "derived": None if self.derived is None else round(self.derived, 3),
             "source": self.source,
+            "unreachable": self.unreachable,
+            "confidence": None if self.confidence is None else round(self.confidence, 3),
+            "low_confidence": self.low_confidence,
         }
 
 
@@ -119,6 +137,10 @@ class PostureVerdict:
     worst_ratio: float = 0.0
     calibrated: bool = False
     reason: str = ""
+    # Metrics excluded from judgement because their baseline is unreachable.
+    # Surfaced rather than silently dropped: a metric that cannot be satisfied
+    # is a calibration problem the person has to fix, not a detail.
+    suspect: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -132,6 +154,7 @@ class PostureVerdict:
             "offenders": list(self.offenders),
             "worst_ratio": round(self.worst_ratio, 3),
             "calibrated": self.calibrated,
+            "suspect": list(self.suspect),
             "metrics": [m.to_dict() for m in self.metrics],
         }
 
@@ -235,6 +258,8 @@ class PostureDetector:
         self._latest: dict[tuple[int, str], tuple[float, float, float]] = {}
         self._flagged: set[tuple[int, str]] = set()
         self._state = AWAY
+        self._suspect: tuple[str, ...] = ()
+        self._confidence: dict[tuple[int, str], float | None] = {}
         self._state_since = 0.0
         self._last_person_at: float | None = None
         self._last_usable_at: float | None = None
@@ -322,6 +347,7 @@ class PostureDetector:
                 ident = (sample.camera_index, spec.key)
                 fresh[ident] = (value, centre, tol, ratio, excess)
                 self._latest[ident] = (value, centre, tol)
+                self._confidence[ident] = sample.confidence.get(spec.key)
 
         for ident, (_v, _c, _t, _r, excess) in fresh.items():
             window = self._windows.get(ident)
@@ -343,8 +369,23 @@ class PostureDetector:
         return PostureVerdict(
             state=self._state, since=self._state_since, metrics=verdicts,
             offenders=offenders, worst_ratio=worst, calibrated=self.calibrated,
-            reason=reason,
+            reason=reason, suspect=self._suspect,
         )
+
+    def _unreachable(self, spec: met.MetricSpec, camera: int) -> bool:
+        """Whether this camera's baseline for ``spec`` is one no neutral
+        posture can satisfy. See :func:`metrics.neutral_shortfall`."""
+        baseline = self.baselines.get(camera)
+        if baseline is None or spec.key not in baseline.metrics:
+            return False
+        tol = self.tolerance(spec, camera)
+        if tol is None:
+            return False
+        return met.neutral_shortfall(spec, baseline.metrics[spec.key].centre, tol) > 0.0
+
+    def _is_low_confidence(self, camera: int, key: str) -> bool:
+        confidence = self._confidence.get((camera, key))
+        return confidence is not None and confidence < self.settings.min_confidence
 
     def _live_windows(self, now: float) -> dict[tuple[int, str], MetricWindow]:
         """Windows still holding an observation recent enough to reason about.
@@ -380,6 +421,7 @@ class PostureDetector:
             return UNKNOWN, "no calibrated metric is currently measurable"
 
         flagged_now: set[tuple[int, str]] = set()
+        suspect: set[str] = set()
         sparse = True
         for ident, window in live.items():
             camera, key = ident
@@ -388,6 +430,21 @@ class PostureDetector:
                 continue
             tol = self.tolerance(spec, camera)
             if tol is None:
+                continue
+            # A baseline a neutral posture cannot reach makes this metric
+            # permanently out of tolerance, which would pin the state to BAD
+            # for good -- and the overlay's hold, which only a GOOD reading
+            # advances, could then never complete however well you sat. The
+            # reference is broken, so it does not get a vote; it is reported
+            # as a calibration problem instead.
+            if self._unreachable(spec, camera):
+                suspect.add(spec.label)
+                continue
+            # Measured badly is not the same as measured. A metric the model is
+            # unsure of still shows on the panel, faded, but it does not get to
+            # take over the screen -- an alert raised on a landmark that was
+            # half guessed is one the person cannot act on and cannot clear.
+            if self._is_low_confidence(camera, spec.key):
                 continue
             # "Full enough" is measured in elapsed time, not sample count, so
             # it stays correct while the sample rate varies at runtime.
@@ -400,6 +457,7 @@ class PostureDetector:
             if window.out_fraction(effective) > settings.bad_fraction:
                 flagged_now.add(ident)
 
+        self._suspect = tuple(sorted(suspect))
         if sparse:
             return (self._state if self._state in (GOOD, BAD) else GOOD,
                     "still filling the window")
@@ -449,6 +507,9 @@ class PostureDetector:
                     flagged=flagged, samples=len(window),
                     floor=spec.min_tolerance, ceiling=spec.max_tolerance,
                     derived=derived, source=source,
+                    unreachable=self._unreachable(spec, camera),
+                    confidence=self._confidence.get((camera, spec.key)),
+                    low_confidence=self._is_low_confidence(camera, spec.key),
                 )
                 if best_row is None or (row.ratio or 0.0) > (best_row.ratio or 0.0):
                     best_row = row

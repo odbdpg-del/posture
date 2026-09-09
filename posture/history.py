@@ -20,6 +20,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .session import SessionAnalysis
+
 log = logging.getLogger(__name__)
 
 # One sample every two seconds keeps an hour of track in 1800 points, which is
@@ -75,6 +77,10 @@ class History:
         self._last_sample = 0.0
         self._score_total = 0
         self._score_count = 0
+        # Per-metric tracks for the session charts and the sustained-deviation
+        # figures. Fed from the same verdict as everything else, so it can
+        # never disagree with the score about what happened.
+        self.session = SessionAnalysis()
 
     # -- recording ---------------------------------------------------------
 
@@ -90,6 +96,7 @@ class History:
                 self._score_total += score
                 self._score_count += 1
             self._persist(lambda: self.store.add_sample(now, score, state))
+        self.session.record(verdict, now)
         before = len(self._episodes)
         current = self._episodes[-1] if self._episodes else None
         open_before = current.ended is None if current else False
@@ -189,4 +196,5 @@ class History:
             "episodes": [e.to_dict() for e in self.episodes()],
             "session_average": self.session_average,
             "count": len(rows),
+            "session": self.session.to_dict(),
         }

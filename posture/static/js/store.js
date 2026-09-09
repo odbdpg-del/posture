@@ -19,6 +19,11 @@ export const store = {
   history: null,
   primaryCamera: null,   // index of the camera shown in the stage
   cameraLayout: "single",  // "single" | "grid"
+  // How much biomechanical detail the camera overlays draw. See
+  // posture-overlay.js MODES. Kept here rather than in the server config
+  // because it is a way of looking, not a way of measuring: it changes
+  // nothing about what is recorded.
+  overlayMode: localStorage.getItem("posture.overlayMode") || "angles",
   connected: false,
   error: "",
   // Camera edits are staged here until applied, so a poll cannot overwrite
@@ -30,7 +35,13 @@ export const store = {
   subscribe(fn) { this._subs.add(fn); return () => this._subs.delete(fn); },
   emit() { for (const fn of this._subs) fn(this); },
 
-  set(patch) { Object.assign(this, patch); this.emit(); },
+  set(patch) {
+    Object.assign(this, patch);
+    if ("overlayMode" in patch) {
+      try { localStorage.setItem("posture.overlayMode", patch.overlayMode); } catch { /* private mode */ }
+    }
+    this.emit();
+  },
 
   /** Cameras as configured, including any unapplied edits. */
   cameras() {

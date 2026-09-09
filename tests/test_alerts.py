@@ -62,7 +62,7 @@ class TestEscalation:
 
     def test_it_does_not_climb_past_the_overlay(self):
         eng = engine()
-        state, _ = run(eng, al.BAD, 600)
+        state, _ = run(eng, al.BAD, 300)
         assert state.level == al.LEVEL_OVERLAY
 
     def test_timings_are_configurable(self):
@@ -240,12 +240,31 @@ class TestReporting:
     def test_headline_names_the_offenders(self):
         eng = engine()
         state, _ = run(eng, al.BAD, 5, offenders=("neck_tilt", "torso_lean"))
-        assert "neck tilt" in state.headline and "torso lean" in state.headline
+        head = state.headline.lower()
+        assert "neck tilt" in head and "torso lean" in head
+
+    def test_the_headline_reports_rather_than_diagnoses(self):
+        """The app measures you against a baseline you set. It does not know
+        whether your posture is healthy, and naming a body part as a fault
+        claims knowledge it does not have."""
+        eng = engine()
+        state, _ = run(eng, al.BAD, 5, offenders=("neck_tilt",))
+        head = state.headline.lower()
+        assert "baseline" in head
+        for word in ("fix your", "bad posture", "correct your", "poor", "wrong"):
+            assert word not in head, head
+
+    def test_the_headline_says_how_long(self):
+        """A measurement without a duration cannot distinguish a stretch from a
+        moment, which is the distinction the whole escalation rests on."""
+        eng = engine()
+        state, _ = run(eng, al.BAD, 95, offenders=("neck_tilt",))
+        assert "1m" in state.headline
 
     def test_detail_explains_the_hold_once_the_overlay_is_up(self):
         eng = engine()
         state, _ = run(eng, al.BAD, 95)
-        assert "Hold a good posture" in state.detail
+        assert "baseline" in state.detail and "closes this" in state.detail
 
     def test_serializes_for_the_panel(self):
         eng = engine()

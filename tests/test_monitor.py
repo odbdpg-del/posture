@@ -240,15 +240,18 @@ class FakeOverlay:
         self.available = True
         self.shown = 0
         self.updates = 0
+        self.views = []
         self.hidden = 0
         self.stopped = False
 
     def show(self, *a):
         self.visible = True
         self.shown += 1
+        self.views.append(a[4] if len(a) > 4 else None)
 
     def update(self, *a):
         self.updates += 1
+        self.views.append(a[4] if len(a) > 4 else None)
 
     def hide(self):
         self.visible = False
@@ -362,3 +365,74 @@ class TestAlertEffects:
         payload = monitor.snapshot()["alert"]
         assert payload["level"] == 3 and payload["active"] is True
         assert "neck_tilt" in payload["offenders"]
+
+
+class TestOverlayView:
+    """What the full-screen overlay is told to draw.
+
+    The overlay used to get four strings and a countdown, which left it unable
+    to say anything when the countdown stopped moving. It now gets the figure
+    and the detector's own reason, and both have to come from the camera the
+    person actually needs to get back in front of.
+    """
+
+    def two_cameras(self):
+        monitor, _workers = make_monitor()
+        side, front = FakeWorker(1, "side"), FakeWorker(2, "front")
+        side.state.landmarks = [[0.5, 0.5, 0.9]]
+        side.state.state = mon.TRACKING
+        side.state.size = (640, 480)
+        front.state.landmarks = [[0.1, 0.2, 0.8]]
+        front.state.state = mon.TRACKING
+        front.state.size = (1280, 720)
+        monitor._workers = [side, front]  # noqa: SLF001
+        return monitor, side, front
+
+    def test_it_follows_the_camera_that_owns_the_offending_metric(self):
+        monitor, _side, front = self.two_cameras()
+        # shoulder_tilt is a front-role metric, so the front camera is the one
+        # to get back in front of.
+        monitor._verdict = det.PostureVerdict(  # noqa: SLF001
+            state="bad", since=0.0, offenders=("shoulder_tilt",))
+        view = monitor._overlay_view()  # noqa: SLF001
+        assert view.landmarks == ((0.1, 0.2, 0.8),)
+        assert view.aspect == pytest.approx(1280 / 720)
+
+    def test_a_side_metric_picks_the_side_camera(self):
+        monitor, _side, _front = self.two_cameras()
+        monitor._verdict = det.PostureVerdict(  # noqa: SLF001
+            state="bad", since=0.0, offenders=("neck_tilt",))
+        assert monitor._overlay_view().landmarks == ((0.5, 0.5, 0.9),)  # noqa: SLF001
+
+    def test_it_keeps_the_offending_camera_after_it_loses_sight_of_you(self):
+        """Turning away is what raises UNKNOWN in the first place. Switching to
+        whichever camera can still see you would draw a figure from the wrong
+        angle at the exact moment the figure matters most."""
+        monitor, side, _front = self.two_cameras()
+        side.state.state = mon.NO_PERSON
+        side.state.landmarks = []
+        monitor._verdict = det.PostureVerdict(  # noqa: SLF001
+            state="unknown", since=0.0, offenders=("neck_tilt",),
+            reason="cannot see left_shoulder")
+        view = monitor._overlay_view()  # noqa: SLF001
+        assert view.landmarks == ()
+        assert view.reason == "cannot see left_shoulder"
+        assert not view.measuring
+
+    def test_it_carries_the_detector_reason_to_the_overlay(self, alerting):
+        """End to end: the reason has to survive the trip, or the window is
+        back to showing a countdown it cannot explain."""
+        monitor, _w, _n, overlays, _al = alerting
+        drive(monitor, "bad", 6.0)
+        assert overlays[0].views and overlays[0].views[-1] is not None
+        assert isinstance(overlays[0].views[-1], mon.OverlayView)
+
+    def test_no_cameras_still_produces_a_view(self):
+        """The overlay can outlive the cameras -- that is what the stale timeout
+        is for -- and must not crash on the way there."""
+        monitor, _workers = make_monitor()
+        monitor._workers = []  # noqa: SLF001
+        monitor._verdict = det.PostureVerdict(  # noqa: SLF001
+            state="unknown", since=0.0, reason="no person detected")
+        view = monitor._overlay_view()  # noqa: SLF001
+        assert view.landmarks == () and view.reason == "no person detected"

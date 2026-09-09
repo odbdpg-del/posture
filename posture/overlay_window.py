@@ -22,6 +22,7 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ INK = "#E8EDE9"
 DIM = "#8A9992"
 BAD = "#F06A5D"
 GOOD = "#4ADE9B"
+WARN = "#E8B84B"
 LINE = "#26332C"
 
 
@@ -38,6 +40,211 @@ LINE = "#26332C"
 # it: unplug the camera while it is up and, without this, it would sit there
 # forever with no posture reading able to dismiss it.
 STALE_AFTER_S = 20.0
+
+
+@dataclass(frozen=True)
+class OverlayView:
+    """The live figure, and why the hold is or is not counting down.
+
+    Landmark positions only, never a frame. This window covers the whole
+    screen, so putting the camera picture on it would paint a live video of the
+    room over whatever is being screen-shared at the time. Positions are enough
+    to align by, and they are the same derived numbers the panel already gets.
+
+    ``state`` and ``reason`` come straight from the detector. They are here
+    because the countdown alone is ambiguous: a hold that is not advancing
+    looks identical whether your posture is wrong or the camera simply cannot
+    see the landmarks it needs, and only one of those is fixed by sitting up.
+    """
+
+    landmarks: tuple = ()
+    thresh: float = 0.5
+    aspect: float = 4 / 3
+    state: str = "unknown"
+    reason: str = ""
+
+    @property
+    def measuring(self) -> bool:
+        """Whether this reading can move the hold at all."""
+        return self.state in ("good", "bad")
+
+
+# Indices into the landmark payload the monitor publishes
+# (monitor.PREVIEW_LANDMARKS), not raw MediaPipe landmark numbers.
+NOSE, L_EYE, R_EYE, L_EAR, R_EAR = 0, 1, 2, 3, 4
+L_SHOULDER, R_SHOULDER, L_ELBOW, R_ELBOW = 5, 6, 7, 8
+L_HIP, R_HIP, L_KNEE, R_KNEE = 9, 10, 11, 12
+
+# Drawn faintly, to carry the framing. Without a picture underneath, a bare
+# head-and-shoulders line is hard to read as a body at a glance.
+LIMBS = ((L_SHOULDER, L_ELBOW), (R_SHOULDER, R_ELBOW),
+         (L_HIP, L_KNEE), (R_HIP, R_KNEE),
+         (L_EAR, L_EYE), (R_EAR, R_EYE), (L_EYE, NOSE), (R_EYE, NOSE))
+
+
+def figure(landmarks, thresh: float) -> list[tuple]:
+    """The seated figure as primitives in normalized 0..1 coordinates.
+
+    Pure geometry, kept out of the Tk thread so it can be tested without a
+    display. Mirrors what the panel draws (``posture-overlay.js``): the
+    measured segments in full strength, the limbs faint, and a dotted vertical
+    through the shoulders -- the reference every angle in the app is taken
+    from, and the thing you are actually trying to line up with.
+
+    Deliberately not mirrored. The panel shows the camera's own view, and a
+    figure that flipped between the two windows would be worse than one that is
+    merely back-to-front.
+    """
+    out: list[tuple] = []
+    if not landmarks:
+        return out
+
+    def seen(i: int) -> bool:
+        return i < len(landmarks) and landmarks[i][2] >= thresh
+
+    def pt(i: int) -> tuple[float, float]:
+        return landmarks[i][0], landmarks[i][1]
+
+    def mid(a: int, b: int):
+        """Midpoint of whichever of the pair is actually visible."""
+        if seen(a) and seen(b):
+            ax, ay = pt(a)
+            bx, by = pt(b)
+            return (ax + bx) / 2, (ay + by) / 2
+        if seen(a):
+            return pt(a)
+        if seen(b):
+            return pt(b)
+        return None
+
+    shoulder = mid(L_SHOULDER, R_SHOULDER)
+    ear = mid(L_EAR, R_EAR)
+    hip = mid(L_HIP, R_HIP)
+
+    if shoulder is not None:
+        sx, sy = shoulder
+        out.append(("line", sx, max(0.0, sy - 0.34), sx, min(1.0, sy + 0.26), "ref"))
+
+    for a, b in LIMBS:
+        if seen(a) and seen(b):
+            ax, ay = pt(a)
+            bx, by = pt(b)
+            out.append(("line", ax, ay, bx, by, "faint"))
+
+    if seen(L_SHOULDER) and seen(R_SHOULDER):
+        ax, ay = pt(L_SHOULDER)
+        bx, by = pt(R_SHOULDER)
+        out.append(("line", ax, ay, bx, by, "key"))
+
+    # Ear-to-shoulder is the segment neck tilt measures, and the one metric
+    # that survives with no hips in frame -- which at a desk is most of the
+    # time. It is drawn whenever it can be.
+    if ear is not None and shoulder is not None:
+        out.append(("line", ear[0], ear[1], shoulder[0], shoulder[1], "key"))
+        out.append(("dot", ear[0], ear[1], "key"))
+
+    # Shoulder-to-hip only when hips are genuinely visible. Drawing a line to a
+    # landmark the app is ignoring would imply a measurement that is not being
+    # taken.
+    if hip is not None and shoulder is not None:
+        out.append(("line", shoulder[0], shoulder[1], hip[0], hip[1], "key"))
+        out.append(("dot", hip[0], hip[1], "key"))
+
+    if shoulder is not None:
+        out.append(("dot", shoulder[0], shoulder[1], "key"))
+
+    for i, lm in enumerate(landmarks):
+        if lm[2] < 0.05:
+            continue
+        out.append(("dot", lm[0], lm[1], "joint" if lm[2] >= thresh else "lost"))
+    return out
+
+
+FIGURE_W, FIGURE_H = 460, 360
+
+_FIGURE_COLOURS = {
+    "faint": "#38473F",
+    "ref": "#4A5B52",
+    "joint": DIM,
+    "lost": "#7A3B36",
+}
+
+
+def _accent(state: str) -> str:
+    """The one colour that says whether the hold is advancing."""
+    if state == "good":
+        return GOOD
+    if state == "bad":
+        return BAD
+    return WARN
+
+
+def hold_message(view: "OverlayView", remaining: float | None) -> tuple[str, str]:
+    """The hold readout: what it says, and the colour of the progress bar.
+
+    A hold that is not advancing has two very different causes, and a frozen
+    countdown cannot tell them apart: either you are sitting badly, or nothing
+    is being measured at all and sitting up will achieve nothing until you are
+    back in view. Saying which is the difference between a window you can
+    dismiss and one that feels stuck.
+    """
+    if not view.measuring:
+        # Landmark names arrive as identifiers. The headline already spells
+        # offenders out, and "right_shoulder" on a screen-filling window reads
+        # as a stack trace rather than a body part.
+        reason = (view.reason or "not measuring you").replace("_", " ")
+        return (reason[0].upper() + reason[1:]
+                + " — the hold is paused until you are back in view", WARN)
+    if view.state == "good" and remaining is not None:
+        return f"Holding — {remaining:.0f}s to go", GOOD
+    return "Sit back to your calibrated posture to start the hold", BAD
+
+
+def _render_figure(canvas, view: "OverlayView", box_w: int, box_h: int) -> None:
+    """Draw the figure into a Tk canvas. Called only on the Tk thread."""
+    canvas.delete("all")
+
+    # The frame's own edges, so being half out of shot reads as being half out
+    # of shot rather than as a body that has lost an arm.
+    aspect = view.aspect if view.aspect and view.aspect > 0 else 4 / 3
+    if aspect >= box_w / box_h:
+        w = float(box_w)
+        h = w / aspect
+    else:
+        h = float(box_h)
+        w = h * aspect
+    ox, oy = (box_w - w) / 2, (box_h - h) / 2
+    canvas.create_rectangle(ox, oy, ox + w, oy + h, outline=LINE, width=1)
+
+    prims = figure(view.landmarks, view.thresh)
+    if not prims:
+        canvas.create_text(box_w / 2, box_h / 2, text="nothing in view",
+                           fill=DIM, font=("Segoe UI", 11))
+        return
+
+    accent = _accent(view.state)
+
+    def px(nx: float, ny: float) -> tuple[float, float]:
+        return ox + nx * w, oy + ny * h
+
+    for prim in prims:
+        kind = prim[-1]
+        colour = accent if kind == "key" else _FIGURE_COLOURS[kind]
+        if prim[0] == "line":
+            x1, y1 = px(prim[1], prim[2])
+            x2, y2 = px(prim[3], prim[4])
+            if kind == "ref":
+                canvas.create_line(x1, y1, x2, y2, fill=colour, width=1,
+                                   dash=(3, 4))
+            else:
+                canvas.create_line(x1, y1, x2, y2, fill=colour,
+                                   width=3 if kind == "key" else 2,
+                                   capstyle="round")
+        else:
+            cx, cy = px(prim[1], prim[2])
+            r = 4.0 if kind == "key" else 2.5
+            canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=colour,
+                               outline="")
 
 
 class OverlayWindow:
@@ -71,26 +278,28 @@ class OverlayWindow:
     # -- public API (any thread) -------------------------------------------
 
     def show(self, headline: str, detail: str, hold_required: float,
-             hold_remaining: float | None) -> None:
+             hold_remaining: float | None, view: "OverlayView | None" = None) -> None:
         if not self.available:
             return
         self._visible = True
         self._last_update = time.monotonic()
         self._ensure_thread()
-        self._commands.put(("show", headline, detail, hold_required, hold_remaining))
+        self._commands.put(("show", headline, detail, hold_required, hold_remaining,
+                            view or OverlayView()))
 
     def update(self, headline: str, detail: str, hold_required: float,
-               hold_remaining: float | None) -> None:
+               hold_remaining: float | None, view: "OverlayView | None" = None) -> None:
         if not self._visible:
             return
         self._last_update = time.monotonic()
-        self._commands.put(("update", headline, detail, hold_required, hold_remaining))
+        self._commands.put(("update", headline, detail, hold_required, hold_remaining,
+                            view or OverlayView()))
 
     def hide(self) -> None:
         if not self._visible:
             return
         self._visible = False
-        self._commands.put(("hide", "", "", 0.0, None))
+        self._commands.put(("hide", "", "", 0.0, None, OverlayView()))
 
     def stop(self, timeout: float = 3.0) -> None:
         """Close the window and wait for its thread to finish.
@@ -105,7 +314,7 @@ class OverlayWindow:
         thread = self._thread
         if thread is None or not thread.is_alive():
             return
-        self._commands.put(("stop", "", "", 0.0, None))
+        self._commands.put(("stop", "", "", 0.0, None, OverlayView()))
         thread.join(timeout=timeout)
         self._thread = None
 
@@ -150,7 +359,14 @@ class OverlayWindow:
         headline.pack(pady=(0, 10))
         detail = tk.Label(wrap, text="", bg=BG, fg=DIM,
                           font=("Segoe UI", 14), wraplength=760, justify="center")
-        detail.pack(pady=(0, 34))
+        detail.pack(pady=(0, 18))
+
+        # What the camera can see of you right now. The countdown says how much
+        # longer to hold; this says whether you are even in a position to be
+        # measured, which is the part that was impossible to guess.
+        canvas = tk.Canvas(wrap, width=FIGURE_W, height=FIGURE_H, bg=BG,
+                           highlightthickness=0)
+        canvas.pack(pady=(0, 20))
 
         hold_label = tk.Label(wrap, text="", bg=BG, fg=DIM,
                               font=("Segoe UI", 11))
@@ -176,7 +392,8 @@ class OverlayWindow:
         def pump() -> None:
             try:
                 while True:
-                    kind, head, det, required, remaining = self._commands.get_nowait()
+                    (kind, head, det, required, remaining,
+                     view) = self._commands.get_nowait()
                     if kind == "stop":
                         root.quit()
                         root.destroy()
@@ -186,14 +403,17 @@ class OverlayWindow:
                         continue
                     headline.config(text=head)
                     detail.config(text=det)
+                    _render_figure(canvas, view, FIGURE_W, FIGURE_H)
                     if required > 0 and remaining is not None:
                         done = max(0.0, min(1.0, 1.0 - remaining / required))
                         bar.coords(fill, 0, 0, bar_w * done, bar_h)
-                        hold_label.config(
-                            text=f"Hold a good posture — {remaining:.0f}s to go")
                     else:
                         bar.coords(fill, 0, 0, 0, bar_h)
-                        hold_label.config(text="Hold a good posture to dismiss")
+
+                    text, colour = hold_message(view, remaining)
+                    bar.itemconfig(fill, fill=colour)
+                    hold_label.config(text=text,
+                                      fg=WARN if not view.measuring else DIM)
                     if kind == "show":
                         root.geometry(
                             f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
@@ -226,7 +446,7 @@ class OverlayWindow:
             # complains: "Tcl_AsyncDelete: async handler deleted by the wrong
             # thread". The widgets are locals, but the callbacks close over
             # them, so the cycle needs a collection to break here and not later.
-            del wrap, headline, detail, hold_label, bar, note, snooze, root
+            del wrap, headline, detail, canvas, hold_label, bar, note, snooze, root
             gc.collect()
 
     def _snooze_clicked(self) -> None:

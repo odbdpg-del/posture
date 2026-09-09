@@ -22,6 +22,7 @@ nobody supervises.
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -97,6 +98,14 @@ class Baseline:
     metrics: dict[str, MetricBaseline] = field(default_factory=dict)
     captured_at: float = 0.0
     duration: float = 0.0
+    # The neutral pose itself, as [x, y, visibility] per preview landmark, so
+    # the panel can draw where you were sitting when you set this baseline
+    # rather than only telling you an angle has changed. Positions, not pixels:
+    # this is the same derived payload the live overlay already uses.
+    #
+    # Empty for baselines captured before this existed, which is why every
+    # reader has to treat it as optional rather than assume it is there.
+    landmarks: list[list[float]] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -129,6 +138,7 @@ class Baseline:
             "captured_at": self.captured_at,
             "duration": self.duration,
             "metrics": {k: v.to_dict() for k, v in self.metrics.items()},
+            "landmarks": [[round(c, 4) for c in lm] for lm in self.landmarks],
         }
 
     @classmethod
@@ -140,7 +150,43 @@ class Baseline:
             duration=float(data.get("duration", 0.0)),
             metrics={k: MetricBaseline.from_dict(v)
                      for k, v in (data.get("metrics") or {}).items()},
+            landmarks=[[float(c) for c in lm]
+                       for lm in (data.get("landmarks") or [])],
         )
+
+
+# What to do about it, for causes where there is something to do. Keyed by a
+# fragment of the note the metric code produced, so the advice lives next to
+# the only place that can act on it rather than in a log nobody reads.
+_ADVICE = {
+    "hips not in frame": (
+        "Neck tilt does not need a hip, so this camera still works without "
+        "them. To add the other three, the camera has to see you from ear to "
+        "hip: move it further back, lower it to about chest height, and put it "
+        "level with one shoulder rather than in front of you."
+    ),
+    "too close together": (
+        "The landmarks it needs collapsed together, which usually means the "
+        "camera is side-on to a body it is being asked to read from the front, "
+        "or the other way round. Check the role assigned to this camera."
+    ),
+}
+
+
+def _join(names: list[str]) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _describe_failure(labels: list[str], reason: str, min_samples: int) -> str:
+    """One sentence per cause: what could not be measured, why, and what helps."""
+    names = _join(labels)
+    if not reason:
+        return (f"{names} could not be calibrated: fewer than {min_samples} usable "
+                "readings. Stay in view of the camera for the whole ten seconds.")
+    advice = next((a for key, a in _ADVICE.items() if key in reason), "")
+    return f"{names} could not be calibrated: {reason}." + (f" {advice}" if advice else "")
 
 
 def median(values: list[float]) -> float:
@@ -193,6 +239,16 @@ class CalibrationSession:
         # wall clock behind its back.
         self._now: float | None = None
         self._values: dict[str, list[float]] = {}
+        # Why frames were not usable, counted. "0 usable samples" is a symptom;
+        # the sample that produced it already carries the cause, and throwing
+        # that away left the panel telling people what had happened but not one
+        # word about what to do next.
+        self._notes: Counter[str] = Counter()
+        # Landmark positions per index, so the neutral pose can be drawn back.
+        # Kept per index rather than per frame because landmarks come and go
+        # independently -- a hip that was visible for half the capture should
+        # contribute the half it was there for, not disqualify the frame.
+        self._landmarks: dict[int, list[tuple[float, float, float]]] = {}
         self._frames = 0
         self._usable = 0
 
@@ -201,6 +257,8 @@ class CalibrationSession:
         self.finished_at = None
         self._now = self.started_at
         self._values.clear()
+        self._notes.clear()
+        self._landmarks.clear()
         self._frames = self._usable = 0
 
     @property
@@ -220,10 +278,17 @@ class CalibrationSession:
             end = time.monotonic()
         return max(0.0, end - self.started_at)
 
-    def add(self, sample: met.MetricSample, now: float | None = None) -> None:
-        """Feed one frame's metrics in."""
+    def add(self, sample: met.MetricSample, now: float | None = None,
+            landmarks: list | None = None) -> None:
+        """Feed one frame's metrics in, and optionally the pose behind them."""
         if not self.running:
             return
+        for i, lm in enumerate(landmarks or ()):
+            # Only landmarks the model actually saw. A remembered zero would
+            # drag the median toward the top-left corner of the frame.
+            if len(lm) >= 3 and lm[2] > 0.0:
+                self._landmarks.setdefault(i, []).append(
+                    (float(lm[0]), float(lm[1]), float(lm[2])))
         # Advance our clock on every sample, whether the caller supplied a time
         # or not. Falling back to the stored value when none is given would
         # freeze elapsed() at zero and the session would never finish.
@@ -233,6 +298,8 @@ class CalibrationSession:
             self._usable += 1
         for key, value in sample.values.items():
             self._values.setdefault(key, []).append(value)
+        for note in sample.notes:
+            self._notes[note] += 1
         if self.elapsed(now) >= self.duration:
             self.finished_at = self.started_at + self.duration
 
@@ -255,6 +322,17 @@ class CalibrationSession:
     def counts(self) -> dict[str, int]:
         return {k: len(v) for k, v in self._values.items()}
 
+    def commonest_note(self) -> str:
+        """The reason the frames gave most often, or "" if they gave none.
+
+        One reason rather than all of them: they are overwhelmingly the same
+        note repeated for every frame of the capture, and a list of fifty
+        identical strings is not more informative than one.
+        """
+        if not self._notes:
+            return ""
+        return self._notes.most_common(1)[0][0]
+
     def result(self) -> tuple[Baseline, list[str]]:
         """Build the baseline, plus a list of human-readable problems.
 
@@ -264,16 +342,44 @@ class CalibrationSession:
         """
         problems: list[str] = []
         metrics: dict[str, MetricBaseline] = {}
+        # Metrics that failed, grouped by why. They almost always fail together
+        # and for one reason -- three metrics need a hip, so a camera that
+        # cannot see one fails all three -- and listing that reason three times
+        # turns a single fact about camera placement into what looks like three
+        # separate faults.
+        failed: dict[str, list[str]] = {}
         for spec in met.SPECS_BY_ROLE.get(self.role, ()):
             values = self._values.get(spec.key, [])
             summary = summarise(spec.key, values, self.min_samples)
             if summary is None:
-                problems.append(
-                    f"{spec.label}: only {len(values)} usable sample(s), "
-                    f"need {self.min_samples}"
-                )
+                failed.setdefault(self.commonest_note(), []).append(spec.label)
                 continue
             metrics[spec.key] = summary
+
+            # A one-sided metric measures you against your own baseline, so a
+            # baseline captured somewhere a neutral posture cannot reach makes
+            # the metric permanently angry: sitting normally reads as a
+            # deviation, and no amount of sitting up ever clears it.
+            #
+            # Seen in the wild. A torso lean baseline of -15.9 degrees -- taken
+            # while reclining -- put an upright torso 15.9 past baseline
+            # against a 7 degree tolerance, so the posture score sat near zero
+            # all day and blamed torso lean while the person sat perfectly
+            # straight. Nothing else in the app can notice this: a reclining
+            # torso is a physically plausible reading, so no guard rejects it,
+            # and the spread was tight, so the baseline looked high quality.
+            drift = met.neutral_shortfall(spec, summary.centre, spec.min_tolerance)
+            if drift > 0.0:
+                problems.append(
+                    f"{spec.label}: baseline of {summary.centre:.1f} is far enough "
+                    f"from neutral ({spec.neutral:.0f} {spec.unit}) that sitting "
+                    f"neutrally is still {drift:.1f} beyond the "
+                    f"{spec.min_tolerance:.0f} tolerance -- so normal posture will "
+                    "always look wrong. Recalibrate sitting the way you want to sit."
+                )
+
+        for reason, labels in failed.items():
+            problems.append(_describe_failure(labels, reason, self.min_samples))
 
         if self._frames and self._usable / self._frames < 0.5:
             problems.append(
@@ -283,8 +389,31 @@ class CalibrationSession:
         baseline = Baseline(
             camera=self.camera, role=self.role, metrics=metrics,
             captured_at=time.time(), duration=self.elapsed(),
+            landmarks=self._neutral_pose(),
         )
         return baseline, problems
+
+    def _neutral_pose(self) -> list[list[float]]:
+        """Median position per landmark, and how often it was seen.
+
+        The third number is a share of the capture rather than a model
+        confidence: a landmark present in one frame of fifty has a median, and
+        it means nothing. Storing how much of the capture stands behind each
+        point lets the overlay draw the well-seen ones and leave out the rest.
+        """
+        if not self._landmarks:
+            return []
+        size = max(self._landmarks) + 1
+        pose: list[list[float]] = []
+        for i in range(size):
+            seen = self._landmarks.get(i) or []
+            if not seen or not self._frames:
+                pose.append([0.0, 0.0, 0.0])
+                continue
+            pose.append([median([p[0] for p in seen]),
+                         median([p[1] for p in seen]),
+                         min(1.0, len(seen) / self._frames)])
+        return pose
 
 
 def build_baseline(camera: int, role: str, samples: Iterable[met.MetricSample],
