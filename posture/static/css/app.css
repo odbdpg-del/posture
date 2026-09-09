@@ -264,18 +264,65 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 
 /* ── Live view layout ──────────────────────────────────────────────────── */
 
+/* Cameras and the live readouts fill the viewport; the analysis sits below
+   the fold, because it is for looking back and scrolling to it is the right
+   cost. The first row is sized to the viewport rather than to content so the
+   charts cannot push the live picture off the top of the screen. */
 .live {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   gap: 12px;
-  height: 100%;
-  min-height: 0;
+  min-height: 100%;
 }
 .live .stage { grid-column: 1; grid-row: 1; min-height: 0; }
 .live .side { grid-column: 2; grid-row: 1 / span 2; min-height: 0; overflow: auto;
               display: flex; flex-direction: column; gap: 12px; }
 .live .strip { grid-column: 1; grid-row: 2; }
+.live .analysis { grid-column: 1 / span 2; grid-row: 3;
+                  display: flex; flex-direction: column; gap: 12px; }
+
+/* ── Biomechanics table ────────────────────────────────────────────────── */
+
+.biomech-summary { display: flex; align-items: center; gap: 10px;
+                   font-size: 11px; color: var(--text-dim); }
+.biomech { padding: 0; }
+.biomech-table { width: 100%; font-variant-numeric: tabular-nums; }
+.biomech-table th { font-size: 10px; letter-spacing: 0.1em;
+                    text-transform: uppercase; color: var(--text-faint); }
+.biomech-table td { padding: 7px 10px; }
+.bm-label { color: var(--text); }
+.bm-note { display: block; font-size: 10px; color: var(--text-faint);
+           margin-top: 2px; }
+.bm-note.bad { color: var(--bad); }
+.bm-row.absent .bm-label { color: var(--text-dim); }
+/* A measurement the model half-guessed is faded rather than hidden: "we can
+   see this badly" is information, and removing the row would quietly shrink
+   the table instead of saying so. */
+.num.faded { color: var(--text-faint); opacity: 0.75; }
+.conf-flag { font-size: 9px; letter-spacing: 0.08em; color: var(--warn);
+             border: 1px solid var(--warn-dim); border-radius: 2px;
+             padding: 0 3px; margin-left: 5px; }
+
+/* ── Session charts ────────────────────────────────────────────────────── */
+
+.session-body { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 10px; }
+.chart-block { padding: 6px 12px 2px; }
+.chart-block + .chart-block { border-top: 1px solid var(--border-soft); }
+.chart-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 2px; }
+.chart-title { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+               color: var(--text-dim); }
+.chart-stats { display: flex; gap: 10px; font-size: 10px; color: var(--text-dim);
+               font-family: var(--mono); margin-left: auto; }
+.chart-wrap { width: 100%; }
+.chart { display: block; width: 100%; height: 88px; }
+.chart-base { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+.chart-axis { display: flex; justify-content: space-between; font-size: 9px;
+              font-family: var(--mono); color: var(--text-faint);
+              padding: 1px 0 4px; }
+
+.headsel-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+                 color: var(--text-faint); }
 
 /* ── Camera stage ──────────────────────────────────────────────────────── */
 

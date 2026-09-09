@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { refreshConfig } from "../store.js";
 import { CameraTile } from "./camera-tile.js";
 import { CameraSelector } from "./camera-selector.js";
+import { MODES } from "./posture-overlay.js";
 
 /**
  * The camera workspace: one large feed, or a grid of all of them.
@@ -41,6 +42,15 @@ export function LiveCameraView(store) {
     h("option", { value: "video" }, "Camera video"),
     h("option", { value: "skeleton" }, "Skeleton only"),
     h("option", { value: "off" }, "Preview off"));
+  // How much the overlay draws. Sits beside the preview-mode control because
+  // the two answer adjacent questions -- what the panel shows of the camera,
+  // and what it draws on top -- and separating them made the second one
+  // undiscoverable.
+  const overlaySelect = h("select", {
+    class: "headsel", title: "How much biomechanical detail to draw",
+    onChange: (e) => store.set({ overlayMode: e.target.value }),
+  }, ...MODES.map(([value, label]) => h("option", { value }, label)));
+
   const body = h("div", { class: "panel-body" });
   const selector = CameraSelector(store);
 
@@ -48,6 +58,8 @@ export function LiveCameraView(store) {
     h("div", { class: "panel-head" },
       title,
       h("span", { style: { flex: "1" } }),
+      h("span", { class: "headsel-label" }, "Overlay"),
+      overlaySelect,
       modeSelect,
       layoutToggle),
     body);
@@ -79,6 +91,8 @@ export function LiveCameraView(store) {
     const mode = (store.config && store.config.web && store.config.web.preview_mode)
       || "video";
     if (document.activeElement !== modeSelect) modeSelect.value = mode;
+    if (document.activeElement !== overlaySelect) overlaySelect.value = store.overlayMode;
+    overlaySelect.disabled = mode === "off";
 
     singleBtn.classList.toggle("on", layout === "single");
     gridBtn.classList.toggle("on", layout === "grid");

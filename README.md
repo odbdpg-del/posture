@@ -253,6 +253,13 @@ be out of tolerance against the baseline it just captured, and says so. The
 detector applies the same test to baselines already stored, since the ones that
 matter were captured before the check existed.
 
+**Alerts report, they do not diagnose.** The app measures you against a
+baseline you set. It does not know whether your posture is healthy, so it says
+*"Neck tilt and forward head away from baseline for 3m 19s"* rather than naming
+a body part as a fault. A test pins that: the headline has to carry the word
+*baseline* and a duration, and must not contain *fix your*, *bad posture* or
+*poor*.
+
 **Direction matters.** Neck flexion is only bad when it *drops*; forward head
 and torso lean only when they *rise*. Shoulder tilt, head roll and lateral
 offset are bad either way. Without this, sitting up straighter would count
@@ -511,6 +518,75 @@ lists whose *shape* changes rarely but whose contents update constantly. The
 sidebar, layout toggle, camera chips, camera rows and the timeline all use one
 of these two approaches. Measured after the fix: the camera list rebuilds 0
 times in 8 seconds, and the timeline 3 times in 12 rather than 24.
+
+## The biomechanics view
+
+The live panel is built to be read as a measurement instrument rather than a
+verdict. Four things carry that.
+
+**The overlay draws the geometry the app actually measures**, not a decorative
+skeleton: the ear-over-shoulder and shoulder-over-hip segments on the side
+camera, the shoulder and ear lines on the front one, the dashed vertical and
+horizontal each angle is taken from, and an arc at the vertex labelled with the
+server's own number. Its viewBox is `0 0 (100·aspect) 100` — `to_metric_frame`
+scaled by 100 — so one unit is the same length in both directions and an angle
+*drawn* is the angle *measured*. A square viewBox stretched over a 4:3 frame,
+which is what it used to be, puts the landmarks in the right place and
+everything derived from them in the wrong one.
+
+**Five overlay modes**, from `minimal` through `landmarks`, `angles` and
+`baseline comparison` to `full biomechanics`. It is a way of looking rather than
+a way of measuring — it changes nothing that is recorded — so it lives in the
+browser and is remembered there, not in the config.
+
+**Baseline comparison draws where you were sitting when you calibrated**: the
+stored neutral pose as a faint dashed figure, with a displacement line only
+where a landmark has actually moved. An arrow per point would be a hedgehog and
+would say nothing. Points the capture barely saw are left out, because a median
+of three frames is not a position.
+
+**Confidence is per metric, and it is the weakest landmark rather than the
+mean.** Averaging a confident shoulder against an extrapolated hip reports 0.8
+for a geometry that is guesswork at one end. It is per metric because it is not
+one question for the frame: on a desk camera the shoulders are solid and the
+hips are inferred, so in a single frame neck tilt can be worth acting on while
+trunk lean is not. A metric below `min_confidence` is still measured, still
+shown — faded, and flagged `LOW` — but it cannot raise an alert and it does not
+count toward the session figures. Measured badly is not the same as measured,
+and hiding it would be worse than nagging: the table would quietly shrink and
+nothing would ever say the camera had stopped seeing you properly.
+
+A metric the setup cannot produce is a row saying so, with the reason from the
+camera that should have produced it — *"cannot see right hip"* — never a blank
+and never a zero. At a desk the hips are usually out of frame, so trunk lean is
+routinely unavailable, and showing 0° for the metric people most expect to see
+would be a fabricated reading.
+
+## Session analysis
+
+The score is the worst axis at an instant. It cannot show forward head creeping
+up all morning while everything else holds — it would say "fine" until the
+moment it did not. So each metric keeps its own track, and the section under the
+cameras charts them against their baseline and tolerance band.
+
+Three numbers per metric, because a total on its own cannot separate them:
+**how long** it spent past tolerance, **what share** of the session that was,
+and the **longest continuous stretch**. Twenty minutes in one sitting is a
+different thing from the same twenty minutes in forty scattered half-minutes.
+Runs under five seconds are excluded — the same threshold, and the same
+reasoning, the episode log already uses.
+
+**Movement is described, not scored.** Sitting rigidly still in a good position
+is not the goal and is arguably worse than drifting between several reasonable
+ones, so the panel reports a variability band and position changes per hour with
+no verdict attached: what the right number is depends on the person, and the app
+does not know it. A change has to move a full tolerance *and* hold there for
+three seconds — distance alone counts jitter, dwell alone counts a slow drift
+back to where it started.
+
+Gaps are credited to nothing, everywhere. Letting an open run swallow the
+stretch where nobody was measured is the difference between "you slouched for
+twenty minutes" and "you left", and no chart draws a line across one.
 
 ## The posture score
 

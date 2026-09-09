@@ -63,6 +63,17 @@ LEVEL_NAMES = {
 GOOD, BAD, UNKNOWN, AWAY = "good", "bad", "unknown", "away"
 
 
+def _span(seconds: float) -> str:
+    minutes, secs = divmod(int(max(0.0, seconds)), 60)
+    return f"{minutes}m {secs}s" if minutes else f"{secs}s"
+
+
+def _join(names: list[str]) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 @dataclass
 class AlertSettings:
     """Every timing the escalation uses. All editable from the panel."""
@@ -379,20 +390,31 @@ class AlertEngine:
         )
 
     def _headline(self) -> str:
+        """What is being reported, said as a measurement.
+
+        The app measures you against a baseline you set. It does not know
+        whether your posture is healthy, and phrasing that named a body part as
+        a fault -- "fix your neck" -- claimed knowledge it does not have and
+        put a diagnosis where an observation belongs. So it reports what
+        changed and for how long, and leaves the conclusion to the person who
+        can see the whole picture.
+        """
         if self._level == LEVEL_NONE:
             return ""
+        span = _span(self._bad_for)
         if not self._offenders:
-            return "Posture needs correcting"
+            return f"Sustained deviation from baseline, {span}"
         pretty = [o.replace("_", " ") for o in self._offenders]
-        return f"Fix your {', '.join(pretty)}"
+        if len(pretty) == 1:
+            return f"{pretty[0].capitalize()} away from baseline for {span}"
+        return f"{_join(pretty).capitalize()} away from baseline for {span}"
 
     def _detail(self, now: float) -> str:
         if self._level == LEVEL_NONE:
             return ""
-        minutes, seconds = divmod(int(self._bad_for), 60)
-        span = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
         if self._level >= LEVEL_OVERLAY:
             left = max(0.0, self.settings.clear_hold - self._good_for)
-            return (f"Out of tolerance for {span}. "
-                    f"Hold a good posture for {left:.0f}s to dismiss.")
-        return f"Out of tolerance for {span}."
+            return (f"Measured past your calibrated tolerance for "
+                    f"{_span(self._bad_for)}. Returning to baseline for "
+                    f"{left:.0f}s closes this.")
+        return f"Measured past your calibrated tolerance for {_span(self._bad_for)}."

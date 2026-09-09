@@ -6,6 +6,13 @@ const TONE = {
   no_person: "", error: "bad", stopped: "", starting: "",
 };
 
+// Which metrics each role measures, so a feed is only ever captioned with
+// numbers its own camera produced.
+const ROLE_METRICS = {
+  side: ["neck_tilt", "forward_head", "neck_flexion", "torso_lean"],
+  front: ["shoulder_tilt", "head_roll", "lateral_offset"],
+};
+
 /**
  * One camera in the workspace: image or skeleton, with the posture overlay.
  *
@@ -120,13 +127,31 @@ export function CameraTile(store, { index = null, onPick = null, chrome = false 
     }
 
     const posture = (store.status && store.status.posture) || {};
-    overlay.render(cam, posture, thresh, { skeletonOnly: mode === "skeleton" });
+    // The stored neutral pose for this camera, for the ghost overlay. Absent
+    // for baselines captured before it was recorded, which the overlay treats
+    // as "no ghost" rather than as an empty one.
+    const baselines = (store.status && store.status.baselines) || {};
+    const stored = baselines[String(cam.index)] || baselines[cam.index];
+    overlay.render(cam, posture, thresh, {
+      mode: store.overlayMode,
+      baseline: stored && stored.landmarks,
+    });
 
-    const shown = chrome ? [] : (posture.metrics || []).slice(0, 3);
-    readout.hidden = shown.length === 0;
+    // Only the metrics this camera's role actually produces. The verdict
+    // carries every metric from every camera, and captioning a side feed with
+    // a shoulder-tilt reading taken by the other one is a lie about where the
+    // number came from.
+    const mine = new Set(ROLE_METRICS[cam.role] || []);
+    const shown = chrome ? [] : (posture.metrics || [])
+      .filter((m) => mine.has(m.key)).slice(0, 4);
+    readout.hidden = shown.length === 0 || store.overlayMode === "minimal";
     mount(readout, shown.map((m) => h("div", { class: "row" },
       h("span", { class: "k" }, m.label),
-      h("span", { class: `v num ${toneForRatio(m.ratio)}` }, fmt(m.value, m.unit)))));
+      h("span", { class: `v num ${m.low_confidence ? "faded" : toneForRatio(m.ratio)}` },
+        fmt(m.value, m.unit)),
+      m.low_confidence
+        ? h("span", { class: "conf-flag" }, "LOW")
+        : null)));
   }
 
   render();

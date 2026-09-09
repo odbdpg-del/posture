@@ -15,6 +15,13 @@ const ROLE_METRICS = {
  * result — presented as a short sequence instead of a dense diagnostic block.
  * The raw numbers are still one disclosure away.
  */
+/** Whether any stored baseline carries the neutral pose the ghost overlay
+ *  draws. Baselines captured before it was recorded have none. */
+function hasPose(s) {
+  return Object.values((s && s.baselines) || {})
+    .some((b) => ((b || {}).landmarks || []).length > 0);
+}
+
 export function CalibrationWizard(store) {
   const root = h("div", { class: "panel" },
     h("div", { class: "panel-head" }, "Calibration"),
@@ -58,24 +65,29 @@ export function CalibrationWizard(store) {
     const suspect = (s.posture && s.posture.suspect) || [];
     mount(body, h("div", { class: "wizard" },
       h("div", { class: "step" }, calibrated ? "Calibrated" : "Step 1 of 1"),
-      h("h3", null, calibrated ? "Baseline is set" : "Set your posture baseline"),
+      h("h3", null, calibrated ? "Baseline is set" : "Set your neutral posture"),
       h("p", null, calibrated
         ? "Everything is measured against how you sat during calibration. "
           + "Recalibrate if you change chair, desk or camera position."
-        : "Sit the way you actually want to sit and hold still. It watches for "
-          + "ten seconds and remembers that as your baseline — nothing is "
-          + "compared against a textbook ideal."),
+        : "Sit naturally in your preferred neutral working position and hold "
+          + "still. It watches for ten seconds, takes the median of every "
+          + "frame so a fidget cannot move the result, and remembers that as "
+          + "your baseline — nothing is compared against a textbook ideal."),
       suspect.length ? h("div", { class: "banner bad" },
         `Not being judged: ${suspect.join(", ")}. `
         + "The baseline was captured somewhere a normal posture cannot reach, so "
         + "sitting well would never clear it. Recalibrate sitting the way you "
         + "actually want to sit.") : null,
+      calibrated && !hasPose(s) ? h("div", { class: "banner info" },
+        "This baseline has no stored pose, so the overlay's baseline comparison "
+        + "has nothing to draw. It was captured before the app recorded one; "
+        + "recalibrating adds it.") : null,
       uncal.length ? h("div", { class: "banner info" },
         `Measurable but not calibrated: ${uncal.join(", ")}. `
         + "Recalibrate to start using them.") : null,
       h("div", { class: "row", style: { justifyContent: "center" } },
         h("button", { class: "primary", disabled: busy || !s.running, onClick: begin },
-          calibrated ? "Recalibrate" : "Start calibration"),
+          calibrated ? "Recalibrate neutral posture" : "Calibrate neutral posture"),
         calibrated ? h("button", { class: "danger", onClick: clearAll },
           "Clear baseline") : null),
       !s.running ? h("p", { class: "faint", style: { marginTop: "14px" } },

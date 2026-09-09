@@ -9,6 +9,8 @@ import { PostureScore } from "./posture-score.js";
 import { AlertPanel } from "./alert-panel.js";
 import { AlertBanner } from "./alert-banner.js";
 import { MetricStrip } from "./metric-gauge.js";
+import { BiomechanicsPanel } from "./biomechanics-panel.js";
+import { SessionAnalysis } from "./session-analysis.js";
 import { PostureTimeline } from "./posture-timeline.js";
 import { DayStats } from "./day-stats.js";
 import { CalibrationWizard } from "./calibration-wizard.js";
@@ -71,12 +73,20 @@ export function AppShell(store) {
 /* ── views ─────────────────────────────────────────────────────────────── */
 
 function buildLive(store) {
+  // Cameras and the live instrumentation stay above the fold; the analysis
+  // below is for looking back, and scrolling to it is the right cost. The
+  // metric strip stays as the at-a-glance row -- the biomechanics table is
+  // the accountable version of the same numbers, not a replacement for
+  // being able to read them without stopping.
   return h("div", { class: "live" },
     LiveCameraView(store),
     h("div", { class: "side" },
       PostureScore(store), AlertBanner(store), AlertPanel(store),
       PostureTimeline(store, { compact: true })),
-    MetricStrip(store));
+    MetricStrip(store),
+    h("div", { class: "analysis" },
+      BiomechanicsPanel(store),
+      SessionAnalysis(store)));
 }
 
 function buildHistory(store) {
