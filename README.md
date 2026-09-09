@@ -377,6 +377,18 @@ outright: there is nobody to nag, and an alert left running would ambush you
 when you sat back down. An unreadable frame freezes the timers instead — we do
 not know whether you fixed it, so we neither escalate nor hand out credit.
 
+**The overlay shows you what it can see.** Freezing the timers is honest but,
+on its own, invisible: a countdown that has stopped moving looks exactly like
+one that has decided your posture is wrong, and sitting up straighter does
+nothing to clear it. So the window draws the live figure — landmark positions
+only, never a frame, because this window covers whatever is being screen-shared
+at the time — and says which it is: *Holding, 3s to go*, *Sit back to your
+calibrated posture*, or *Cannot see your right shoulder — the hold is paused
+until you are back in view*. The figure is drawn from the camera whose role
+owns the metric being complained about, and it keeps drawing from that camera
+after it loses sight of you, since that is the one you have to get back in
+front of.
+
 **The overlay cannot trap you.** It takes itself down if nothing updates it for
 20 seconds, so unplugging the camera while it is up cannot leave a screen-
 blocking window that no posture reading is able to dismiss.

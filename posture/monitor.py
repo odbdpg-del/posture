@@ -26,7 +26,7 @@ from . import metrics as met
 from . import score as scoring
 from .history import History
 from .notify import Notifier
-from .overlay_window import OverlayWindow
+from .overlay_window import OverlayView, OverlayWindow
 from .store import Store
 from .calibration import Baseline, CalibrationSession
 from .capture import CameraCapture, CameraOpenError
@@ -498,12 +498,47 @@ class Monitor:
             return
         if want and not self._overlay.visible:
             self._overlay.show(state.headline, state.detail,
-                               state.hold_required, state.hold_remaining)
+                               state.hold_required, state.hold_remaining,
+                               self._overlay_view())
         elif want:
             self._overlay.update(state.headline, state.detail,
-                                 state.hold_required, state.hold_remaining)
+                                 state.hold_required, state.hold_remaining,
+                                 self._overlay_view())
         elif self._overlay.visible:
             self._overlay.hide()
+
+    def _overlay_view(self) -> OverlayView:
+        """The figure and tracking state the overlay should draw.
+
+        Landmarks only. Which camera they come from matters when there are two:
+        the one whose role owns the metric being complained about is the one
+        you have to get back in front of, so it wins even if it has lost sight
+        of you -- that is exactly the state worth showing. Otherwise any camera
+        that can currently see you will do.
+        """
+        with self._lock:
+            workers = list(self._workers)
+            verdict = self._verdict
+            thresh = self.cfg.sampling.visibility_threshold
+        if not workers:
+            return OverlayView(state=verdict.state, reason=verdict.reason)
+
+        roles = {met.SPEC_BY_KEY[k].role for k in verdict.offenders
+                 if k in met.SPEC_BY_KEY}
+        chosen = next((w for w in workers if w.cam.role in roles), None)
+        if chosen is None:
+            chosen = next((w for w in workers
+                           if w.state.state in (TRACKING, PARTIAL)), workers[0])
+
+        cam = chosen.state
+        size = cam.size
+        return OverlayView(
+            landmarks=tuple(tuple(lm) for lm in cam.landmarks),
+            thresh=thresh,
+            aspect=(size[0] / size[1]) if size and size[1] else 4 / 3,
+            state=verdict.state,
+            reason=verdict.reason,
+        )
 
     def snooze(self, seconds: float | None = None) -> dict:
         """Suppress alerts for a fixed stretch. Explicit and time-boxed."""
