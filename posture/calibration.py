@@ -287,12 +287,12 @@ class CalibrationSession:
             # straight. Nothing else in the app can notice this: a reclining
             # torso is a physically plausible reading, so no guard rejects it,
             # and the spread was tight, so the baseline looked high quality.
-            drift = met.signed_excess(spec, spec.neutral, summary.centre)
-            if drift > spec.min_tolerance:
+            drift = met.neutral_shortfall(spec, summary.centre, spec.min_tolerance)
+            if drift > 0.0:
                 problems.append(
                     f"{spec.label}: baseline of {summary.centre:.1f} is far enough "
                     f"from neutral ({spec.neutral:.0f} {spec.unit}) that sitting "
-                    f"neutrally reads {drift:.1f} past it, beyond the "
+                    f"neutrally is still {drift:.1f} beyond the "
                     f"{spec.min_tolerance:.0f} tolerance -- so normal posture will "
                     "always look wrong. Recalibrate sitting the way you want to sit."
                 )

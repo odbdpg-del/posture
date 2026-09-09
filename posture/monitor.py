@@ -486,6 +486,16 @@ class Monitor:
                     self._notifier = Notifier()
                 self._notifier.send(event.state.headline or "Fix your posture",
                                     event.state.detail)
+            elif event.kind == "stood_down" and cfg.os_notifications:
+                # The window vanishing with no explanation would read as a
+                # glitch, and the thing worth saying is not "you are fine" --
+                # it is that the app was asking for something unreachable and
+                # has stopped. Silence here would leave the underlying problem
+                # to be rediscovered the next time it escalates.
+                if self._notifier is None:
+                    self._notifier = Notifier()
+                self._notifier.send("Posture alert stood down",
+                                    self._stand_down_detail())
 
         if not cfg.fullscreen_overlay:
             if self._overlay is not None:
@@ -507,6 +517,17 @@ class Monitor:
                                  self._overlay_view())
         elif self._overlay.visible:
             self._overlay.hide()
+
+    def _stand_down_detail(self) -> str:
+        """Why the overlay gave up, in terms the person can act on."""
+        suspect = self._verdict.suspect
+        if suspect:
+            return (f"{', '.join(suspect)} cannot be satisfied by any normal "
+                    "posture -- the baseline was captured somewhere you do not "
+                    "sit. Recalibrate to start scoring it again.")
+        return ("It was asking for a posture that never arrived in ten minutes. "
+                "Check the camera still sees you the way it did at calibration, "
+                "and recalibrate if it has moved.")
 
     def _overlay_view(self) -> OverlayView:
         """The figure and tracking state the overlay should draw.

@@ -62,7 +62,7 @@ class TestEscalation:
 
     def test_it_does_not_climb_past_the_overlay(self):
         eng = engine()
-        state, _ = run(eng, al.BAD, 600)
+        state, _ = run(eng, al.BAD, 300)
         assert state.level == al.LEVEL_OVERLAY
 
     def test_timings_are_configurable(self):

@@ -52,6 +52,10 @@ export function CalibrationWizard(store) {
 
   function renderIdle(calibrated, s) {
     const uncal = s.uncalibrated_metrics || [];
+    // Metrics the detector has stopped judging because their baseline cannot
+    // be satisfied by any normal posture. The wizard is where this belongs:
+    // the only fix is to calibrate again, and the button is right here.
+    const suspect = (s.posture && s.posture.suspect) || [];
     mount(body, h("div", { class: "wizard" },
       h("div", { class: "step" }, calibrated ? "Calibrated" : "Step 1 of 1"),
       h("h3", null, calibrated ? "Baseline is set" : "Set your posture baseline"),
@@ -61,6 +65,11 @@ export function CalibrationWizard(store) {
         : "Sit the way you actually want to sit and hold still. It watches for "
           + "ten seconds and remembers that as your baseline — nothing is "
           + "compared against a textbook ideal."),
+      suspect.length ? h("div", { class: "banner bad" },
+        `Not being judged: ${suspect.join(", ")}. `
+        + "The baseline was captured somewhere a normal posture cannot reach, so "
+        + "sitting well would never clear it. Recalibrate sitting the way you "
+        + "actually want to sit.") : null,
       uncal.length ? h("div", { class: "banner info" },
         `Measurable but not calibrated: ${uncal.join(", ")}. `
         + "Recalibrate to start using them.") : null,

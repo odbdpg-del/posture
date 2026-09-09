@@ -233,7 +233,9 @@ against a 7° tolerance, so the score sat near zero all day and blamed torso lea
 while the person sat straight. Nothing else can catch it — a reclining torso is
 physically plausible, and the spread was tight, so the baseline looked like a
 good one. Calibration now checks whether the metric's neutral value would itself
-be out of tolerance against the baseline it just captured, and says so.
+be out of tolerance against the baseline it just captured, and says so. The
+detector applies the same test to baselines already stored, since the ones that
+matter were captured before the check existed.
 
 **Direction matters.** Neck flexion is only bad when it *drops*; forward head
 and torso lean only when they *rise*. Shoulder tilt, head roll and lateral
@@ -417,6 +419,26 @@ front of.
 **The overlay cannot trap you.** It takes itself down if nothing updates it for
 20 seconds, so unplugging the camera while it is up cannot leave a screen-
 blocking window that no posture reading is able to dismiss.
+
+That was not enough, because it only covered the window going deaf. Reported
+from a live session: *"very often this screen is almost impossible to get back
+out of"*. It was not almost impossible, it was impossible — a torso lean
+baseline of −15.9° demanded a torso reclined 8.9° past vertical before the
+metric counted as in tolerance, one permanently-flagged metric pins the state to
+`bad`, and the hold only advances on a `good` reading. Sitting up straight, the
+thing the window was asking for, could never clear it. Snooze was the only exit.
+
+So there are two defences now, because they fail differently. The detector
+**refuses to judge you against a baseline no neutral posture can reach**, which
+fixes the diagnosable case at its root and reports the metric as suspect instead
+of silently dropping it — the calibration panel says which, and the only fix is
+the button next to it. And the alert engine **stands the overlay down when the
+hold has never once started**: not "never finished", never started, meaning not
+a single good reading in ten minutes. Both conditions are needed together, and
+the discriminator matters — someone who reaches a good posture even for a moment
+has shown the target is reachable and is simply being asked to hold it, which is
+the mechanic working. The valve is a claim about the app being wrong, never a
+way to wait out the nag by sitting still and refusing.
 
 All timings, the hold, and the snooze length live in the config and are
 editable under Settings. Both effects can be switched off independently of the

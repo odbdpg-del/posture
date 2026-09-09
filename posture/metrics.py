@@ -211,6 +211,23 @@ SPECS_BY_ROLE: dict[str, tuple[MetricSpec, ...]] = {
 SPEC_BY_KEY: dict[str, MetricSpec] = {s.key: s for s in SPECS}
 
 
+def neutral_shortfall(spec: MetricSpec, baseline: float, tolerance: float) -> float:
+    """How far past ``tolerance`` a neutral posture sits against this baseline.
+
+    Positive means the metric cannot be satisfied by sitting neutrally: the
+    baseline was captured somewhere an ordinary posture cannot reach, so the
+    metric is out of tolerance no matter how well you sit. A baseline of -15.9
+    degrees of torso lean -- taken while reclining -- puts an upright torso
+    15.9 past it against a 7 degree tolerance, and nothing you do at a desk
+    will ever clear it.
+
+    Used in two places, which is why it lives here rather than in either of
+    them: calibration reports it as a problem with the baseline it has just
+    captured, and the detector refuses to judge you against one.
+    """
+    return signed_excess(spec, spec.neutral, baseline) - tolerance
+
+
 def signed_excess(spec: MetricSpec, value: float, baseline: float) -> float:
     """How far past the baseline this value sits, in the bad direction only.
 

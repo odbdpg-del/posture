@@ -84,6 +84,23 @@ class AlertSettings:
     hold_grace: float = 1.5
     # How long a snooze lasts. Time-boxed on purpose.
     snooze_seconds: float = 600.0
+    # The overlay covers the whole screen, so it has to stay escapable by doing
+    # what it asks. If it has been up this long and the hold has never once
+    # *started* -- not "never finished", never started, meaning not a single
+    # good reading in all that time -- then what it is asking for is not being
+    # achieved: a baseline nothing can satisfy, a camera that has been moved,
+    # a metric reading off a landmark it should not trust. Continuing to block
+    # the screen on that is not discipline, it is a bug with a nag attached.
+    #
+    # Deliberately not a general timeout, and deliberately long. Someone who
+    # reaches a good posture even for a moment has shown the target is
+    # reachable, and the overlay goes on asking them to hold it -- which is the
+    # whole mechanic, and this must not become a way to wait out the nag. Two
+    # things have to be true together: no good reading at all, and this long
+    # about it. Ten minutes of a screen-blocking window that has never once
+    # acknowledged the person is a claim about the app, not about them.
+    # Zero disables it.
+    overlay_giveup_after: float = 600.0
     # Re-notify if posture is still bad this long after the last notification.
     # Zero disables the repeat, which is the default: one notification per
     # episode, with the overlay as the escalation rather than nagging.
@@ -170,6 +187,9 @@ class AlertEngine:
         self._bad_for = 0.0
         self._good_for = 0.0
         self._unknown_for = 0.0
+        # Longest continuous good stretch reached since the overlay went up.
+        # Zero after two minutes of it means the hold has never once started.
+        self._best_hold = 0.0
         self._last_t: float | None = None
         self._snoozed_until: float | None = None
         self._last_notify_at: float | None = None
@@ -249,8 +269,11 @@ class AlertEngine:
         if self._level >= LEVEL_OVERLAY:
             # Only a verified good stretch dismisses the overlay. Leaning out
             # of frame must not count as fixing your posture.
+            self._best_hold = max(self._best_hold, self._good_for)
             if self._good_for >= self.settings.clear_hold:
                 self._clear(now)
+            elif self._hold_is_not_happening(now):
+                self._stand_down(now)
             return self.state(now)
 
         if state == GOOD:
@@ -287,8 +310,39 @@ class AlertEngine:
                 level = candidate
         return level
 
+    def _hold_is_not_happening(self, now: float) -> bool:
+        """Whether the overlay is demanding something that is not being met.
+
+        The test is on progress, not on time alone: a single good reading at
+        any point says the target is reachable and the person is simply being
+        asked to hold it, which is the mechanic working. Never having reached
+        one is the case that cannot be waited out.
+        """
+        limit = self.settings.overlay_giveup_after
+        return (limit > 0.0 and self._best_hold <= 0.0
+                and now - self._since >= limit)
+
+    def _stand_down(self, now: float) -> None:
+        """Take the overlay down and snooze, because it cannot be satisfied.
+
+        Snoozing rather than merely clearing, because the posture that raised
+        it is still bad by the app's own reckoning, so anything less would
+        re-escalate within seconds and put the window straight back up. This is
+        the one path that lowers the level without a good reading, and it is
+        not a dismissal: the person did not ask for it, the app concluded it
+        was asking for the impossible and said so.
+        """
+        previous, self._level, self._since = self._level, LEVEL_NONE, now
+        self._last_notify_at = None
+        self._bad_for = self._good_for = self._best_hold = 0.0
+        self._snoozed_until = now + self.settings.snooze_seconds
+        self.events.append(
+            AlertEvent("stood_down", LEVEL_NONE, self.state(now), previous))
+
     def _escalate(self, level: int, now: float) -> None:
         previous, self._level, self._since = self._level, level, now
+        if level >= LEVEL_OVERLAY and previous < LEVEL_OVERLAY:
+            self._best_hold = 0.0
         if level >= LEVEL_NOTIFY:
             self._last_notify_at = now
         self.events.append(AlertEvent("escalate", level, self.state(now), previous))
@@ -296,6 +350,7 @@ class AlertEngine:
     def _clear(self, now: float) -> None:
         previous, self._level, self._since = self._level, LEVEL_NONE, now
         self._last_notify_at = None
+        self._best_hold = 0.0
         if previous > LEVEL_NONE:
             self.events.append(AlertEvent("clear", LEVEL_NONE, self.state(now), previous))
 
@@ -303,6 +358,7 @@ class AlertEngine:
         if not keep_level and self._level > LEVEL_NONE:
             self._clear(now)
         self._bad_for = self._good_for = self._unknown_for = 0.0
+        self._best_hold = 0.0
 
     # -- reporting ---------------------------------------------------------
 
