@@ -122,7 +122,9 @@ export function CalibrationWizard(store) {
       h("div", { class: "step" }, ok ? "Done" : "Failed"),
       h("h3", null, ok ? "Baseline saved" : "Calibration failed"),
       h("p", null, ok
-        ? "Posture is now measured against this. Recalibrate any time."
+        ? "Posture is now measured against this. Recalibrate any time. "
+          + "Not every metric needs every camera — a partial baseline is a "
+          + "working one."
         : "No baseline was recorded. Sit in view of the camera for the full ten "
           + "seconds and try again."),
       h("div", { class: "checklist" }, (result.cameras || []).flatMap((c) => {
@@ -132,9 +134,14 @@ export function CalibrationWizard(store) {
         }, h("span", { class: "box" }, c.metrics[k] ? "✓" : "—"),
            `${labelFor(k)} — ${c.name}`));
       })),
+      // Red only when nothing was saved. A baseline that came back with some
+      // metrics is a working baseline, and at a desk the hip metrics are
+      // routinely unavailable — the app is built around that, so presenting it
+      // as three errors made a normal setup look like a failed calibration.
       (result.problems || []).length
-        ? h("div", { class: "banner bad", style: { textAlign: "left" } },
-            h("div", null, "Notes"),
+        ? h("div", { class: `banner ${ok ? "info" : "bad"}`,
+                     style: { textAlign: "left" } },
+            h("div", null, ok ? "What this baseline does not cover" : "Notes"),
             h("ul", null, result.problems.map((p) => h("li", null, p))))
         : null,
       h("div", { class: "row", style: { justifyContent: "center" } },

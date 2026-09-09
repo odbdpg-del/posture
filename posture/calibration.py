@@ -155,6 +155,40 @@ class Baseline:
         )
 
 
+# What to do about it, for causes where there is something to do. Keyed by a
+# fragment of the note the metric code produced, so the advice lives next to
+# the only place that can act on it rather than in a log nobody reads.
+_ADVICE = {
+    "hips not in frame": (
+        "Neck tilt does not need a hip, so this camera still works without "
+        "them. To add the other three, the camera has to see you from ear to "
+        "hip: move it further back, lower it to about chest height, and put it "
+        "level with one shoulder rather than in front of you."
+    ),
+    "too close together": (
+        "The landmarks it needs collapsed together, which usually means the "
+        "camera is side-on to a body it is being asked to read from the front, "
+        "or the other way round. Check the role assigned to this camera."
+    ),
+}
+
+
+def _join(names: list[str]) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _describe_failure(labels: list[str], reason: str, min_samples: int) -> str:
+    """One sentence per cause: what could not be measured, why, and what helps."""
+    names = _join(labels)
+    if not reason:
+        return (f"{names} could not be calibrated: fewer than {min_samples} usable "
+                "readings. Stay in view of the camera for the whole ten seconds.")
+    advice = next((a for key, a in _ADVICE.items() if key in reason), "")
+    return f"{names} could not be calibrated: {reason}." + (f" {advice}" if advice else "")
+
+
 def median(values: list[float]) -> float:
     """Median of a non-empty list."""
     ordered = sorted(values)
@@ -308,15 +342,17 @@ class CalibrationSession:
         """
         problems: list[str] = []
         metrics: dict[str, MetricBaseline] = {}
+        # Metrics that failed, grouped by why. They almost always fail together
+        # and for one reason -- three metrics need a hip, so a camera that
+        # cannot see one fails all three -- and listing that reason three times
+        # turns a single fact about camera placement into what looks like three
+        # separate faults.
+        failed: dict[str, list[str]] = {}
         for spec in met.SPECS_BY_ROLE.get(self.role, ()):
             values = self._values.get(spec.key, [])
             summary = summarise(spec.key, values, self.min_samples)
             if summary is None:
-                problems.append(
-                    f"{spec.label}: only {len(values)} usable sample(s), "
-                    f"need {self.min_samples}"
-                    + (f" -- {self.commonest_note()}" if self.commonest_note() else "")
-                )
+                failed.setdefault(self.commonest_note(), []).append(spec.label)
                 continue
             metrics[spec.key] = summary
 
@@ -341,6 +377,9 @@ class CalibrationSession:
                     f"{spec.min_tolerance:.0f} tolerance -- so normal posture will "
                     "always look wrong. Recalibrate sitting the way you want to sit."
                 )
+
+        for reason, labels in failed.items():
+            problems.append(_describe_failure(labels, reason, self.min_samples))
 
         if self._frames and self._usable / self._frames < 0.5:
             problems.append(
