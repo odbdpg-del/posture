@@ -73,20 +73,29 @@ class SampleSmoother:
         """
         if not sample.values:
             return sample
-        smoothed: dict[str, float] = {}
-        for key, value in sample.values.items():
-            history = self._history.get(key)
+        smoothed = self._median(sample.t, "v:", sample.values)
+        # Confidence gets the same treatment. It is derived from the same
+        # jittering landmarks, so a single frame where the model briefly
+        # doubted a shoulder should not fade a reading the rest of the window
+        # agrees on.
+        confidence = self._median(sample.t, "c:", sample.confidence)
+        return replace(sample, values=smoothed, confidence=confidence)
+
+    def _median(self, t: float, prefix: str, values: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for key, value in values.items():
+            history = self._history.get(prefix + key)
             if history is None:
-                history = self._history[key] = deque()
-            history.append((sample.t, value))
+                history = self._history[prefix + key] = deque()
+            history.append((t, value))
             # Pruning against this sample's own clock is what lets a metric
             # vanish for a minute and come back clean: everything older than
             # the window goes, however long the gap was.
-            cutoff = sample.t - self.seconds
+            cutoff = t - self.seconds
             while history and history[0][0] < cutoff:
                 history.popleft()
-            smoothed[key] = median(v for _t, v in history)
-        return replace(sample, values=smoothed)
+            out[key] = median(v for _t, v in history)
+        return out
 
     def reset(self) -> None:
         """Forget everything. For when the stream is no longer continuous."""

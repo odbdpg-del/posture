@@ -261,6 +261,13 @@ class MetricSample:
     facing: int | None = None
     near_side: str | None = None
     notes: tuple[str, ...] = ()
+    # Per-metric confidence, 0..1, keyed like ``values``. How much the model
+    # trusts the landmarks *this particular metric* rests on, which is not the
+    # same question for all of them: on a desk camera the shoulders are usually
+    # solid while the hips are guesswork, so torso lean can be far shakier than
+    # neck tilt in the very same frame. Reporting one number for the frame
+    # would average that distinction away.
+    confidence: dict[str, float] = field(default_factory=dict)
     # Which camera produced this. The detector compares each camera against its
     # own baseline, so a sample has to carry its origin with it.
     camera_index: int = 0
@@ -310,6 +317,40 @@ def _pick_near_side(arr: np.ndarray, thresh: float) -> tuple[str | None, tuple[s
     if not _visible(arr, shoulder, thresh):
         return None, best_missing
     return best_side, best_missing
+
+
+def _weakest(arr: np.ndarray, *indices: int) -> float:
+    """Confidence in a measurement built from these landmarks.
+
+    The minimum, not the mean. A geometry is exactly as trustworthy as its
+    worst-seen corner: averaging a confident shoulder against an invented hip
+    reports a comfortable 0.8 for a number that is entirely guesswork at one
+    end.
+    """
+    return float(min(arr[i, 3] for i in indices))
+
+
+def _side_confidence(arr: np.ndarray, values: dict[str, float],
+                     ear: int, shoulder: int, hip: int) -> dict[str, float]:
+    """Which landmarks each side metric actually rests on."""
+    needs = {
+        "neck_tilt": (ear, shoulder),
+        "torso_lean": (shoulder, hip),
+        "neck_flexion": (ear, shoulder, hip),
+        "forward_head": (ear, shoulder, hip),
+    }
+    return {key: _weakest(arr, *idx) for key, idx in needs.items() if key in values}
+
+
+def _front_confidence(arr: np.ndarray, values: dict[str, float]) -> dict[str, float]:
+    ls, rs = lmk.LEFT_SHOULDER, lmk.RIGHT_SHOULDER
+    le, re = lmk.LEFT_EAR, lmk.RIGHT_EAR
+    needs = {
+        "shoulder_tilt": (ls, rs),
+        "head_roll": (le, re),
+        "lateral_offset": (le, re, ls, rs),
+    }
+    return {key: _weakest(arr, *idx) for key, idx in needs.items() if key in values}
 
 
 def _facing(arr: np.ndarray, pts: np.ndarray, ear_idx: int, thresh: float) -> int | None:
@@ -383,6 +424,7 @@ def compute_side(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) ->
             "side", t, True, values=values, missing=missing, scale=scale,
             scale_kind=scale_kind, facing=facing, near_side=near_side,
             notes=tuple(notes),
+            confidence=_side_confidence(arr, values, ear_i, sh_i, hip_i),
         )
 
     hip = pts[hip_i]
@@ -413,7 +455,7 @@ def compute_side(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) ->
     return MetricSample(
         "side", t, True, values=values, missing=missing, scale=scale,
         scale_kind=scale_kind, facing=facing, near_side=near_side,
-        notes=tuple(notes),
+        notes=tuple(notes), confidence=_side_confidence(arr, values, ear_i, sh_i, hip_i),
     )
 
 
@@ -471,6 +513,7 @@ def compute_front(arr: np.ndarray, aspect: float, vis_thresh: float, t: float) -
     return MetricSample(
         "front", t, True, values=values, missing=missing, scale=scale,
         scale_kind="shoulders", notes=tuple(notes),
+        confidence=_front_confidence(arr, values),
     )
 
 

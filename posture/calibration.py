@@ -98,6 +98,14 @@ class Baseline:
     metrics: dict[str, MetricBaseline] = field(default_factory=dict)
     captured_at: float = 0.0
     duration: float = 0.0
+    # The neutral pose itself, as [x, y, visibility] per preview landmark, so
+    # the panel can draw where you were sitting when you set this baseline
+    # rather than only telling you an angle has changed. Positions, not pixels:
+    # this is the same derived payload the live overlay already uses.
+    #
+    # Empty for baselines captured before this existed, which is why every
+    # reader has to treat it as optional rather than assume it is there.
+    landmarks: list[list[float]] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -130,6 +138,7 @@ class Baseline:
             "captured_at": self.captured_at,
             "duration": self.duration,
             "metrics": {k: v.to_dict() for k, v in self.metrics.items()},
+            "landmarks": [[round(c, 4) for c in lm] for lm in self.landmarks],
         }
 
     @classmethod
@@ -141,6 +150,8 @@ class Baseline:
             duration=float(data.get("duration", 0.0)),
             metrics={k: MetricBaseline.from_dict(v)
                      for k, v in (data.get("metrics") or {}).items()},
+            landmarks=[[float(c) for c in lm]
+                       for lm in (data.get("landmarks") or [])],
         )
 
 
@@ -199,6 +210,11 @@ class CalibrationSession:
         # that away left the panel telling people what had happened but not one
         # word about what to do next.
         self._notes: Counter[str] = Counter()
+        # Landmark positions per index, so the neutral pose can be drawn back.
+        # Kept per index rather than per frame because landmarks come and go
+        # independently -- a hip that was visible for half the capture should
+        # contribute the half it was there for, not disqualify the frame.
+        self._landmarks: dict[int, list[tuple[float, float, float]]] = {}
         self._frames = 0
         self._usable = 0
 
@@ -208,6 +224,7 @@ class CalibrationSession:
         self._now = self.started_at
         self._values.clear()
         self._notes.clear()
+        self._landmarks.clear()
         self._frames = self._usable = 0
 
     @property
@@ -227,10 +244,17 @@ class CalibrationSession:
             end = time.monotonic()
         return max(0.0, end - self.started_at)
 
-    def add(self, sample: met.MetricSample, now: float | None = None) -> None:
-        """Feed one frame's metrics in."""
+    def add(self, sample: met.MetricSample, now: float | None = None,
+            landmarks: list | None = None) -> None:
+        """Feed one frame's metrics in, and optionally the pose behind them."""
         if not self.running:
             return
+        for i, lm in enumerate(landmarks or ()):
+            # Only landmarks the model actually saw. A remembered zero would
+            # drag the median toward the top-left corner of the frame.
+            if len(lm) >= 3 and lm[2] > 0.0:
+                self._landmarks.setdefault(i, []).append(
+                    (float(lm[0]), float(lm[1]), float(lm[2])))
         # Advance our clock on every sample, whether the caller supplied a time
         # or not. Falling back to the stored value when none is given would
         # freeze elapsed() at zero and the session would never finish.
@@ -326,8 +350,31 @@ class CalibrationSession:
         baseline = Baseline(
             camera=self.camera, role=self.role, metrics=metrics,
             captured_at=time.time(), duration=self.elapsed(),
+            landmarks=self._neutral_pose(),
         )
         return baseline, problems
+
+    def _neutral_pose(self) -> list[list[float]]:
+        """Median position per landmark, and how often it was seen.
+
+        The third number is a share of the capture rather than a model
+        confidence: a landmark present in one frame of fifty has a median, and
+        it means nothing. Storing how much of the capture stands behind each
+        point lets the overlay draw the well-seen ones and leave out the rest.
+        """
+        if not self._landmarks:
+            return []
+        size = max(self._landmarks) + 1
+        pose: list[list[float]] = []
+        for i in range(size):
+            seen = self._landmarks.get(i) or []
+            if not seen or not self._frames:
+                pose.append([0.0, 0.0, 0.0])
+                continue
+            pose.append([median([p[0] for p in seen]),
+                         median([p[1] for p in seen]),
+                         min(1.0, len(seen) / self._frames)])
+        return pose
 
 
 def build_baseline(camera: int, role: str, samples: Iterable[met.MetricSample],

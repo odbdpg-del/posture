@@ -113,6 +113,8 @@ class CameraState:
                 }
                 for spec in met.SPECS_BY_ROLE.get(self.role, ())
             ],
+            "confidence": ({k: round(v, 3) for k, v in sample.confidence.items()}
+                           if sample else {}),
             "missing": list(sample.missing) if sample else [],
             "notes": list(sample.notes) if sample else [],
             "near_side": sample.near_side if sample else None,
@@ -296,7 +298,7 @@ class CameraWorker:
 
                 session = self._calibration
                 if session is not None and session.running:
-                    session.add(sample)
+                    session.add(sample, landmarks=preview)
                 if self._on_sample is not None:
                     self._on_sample(sample)
         finally:
@@ -733,6 +735,7 @@ def _settings(cfg: Config) -> det.DetectionSettings:
         exit_ratio=d.exit_ratio, absence_seconds=d.absence_seconds,
         tolerance_multiplier=d.tolerance_multiplier,
         min_window_fill=d.min_window_fill, overrides=dict(d.overrides),
+        min_confidence=d.min_confidence,
     )
 
 

@@ -129,4 +129,4 @@ class TestItIsAppliedBeforeAnythingJudges:
         assert "self._smoother.add(" in src
         smoothed = src.index("self._smoother.add(")
         assert smoothed < src.index("self._on_sample(sample)")
-        assert smoothed < src.index("session.add(sample)")
+        assert smoothed < src.index("session.add(sample")

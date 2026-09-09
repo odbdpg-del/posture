@@ -66,6 +66,13 @@ class DetectionSettings:
     # A window with less than this fraction of its nominal sample count is too
     # sparse to judge; prevents a verdict from three samples after a restart.
     min_window_fill: float = 0.30
+    # Confidence below which a metric is reported but not acted on. Landmarks
+    # already have to clear the visibility threshold before a metric is
+    # computed at all, so this is the second, stricter gate: enough to measure
+    # is not the same as enough to interrupt someone over. The panel fades a
+    # reading below this and says so rather than hiding it, because "we can see
+    # this badly" is information too.
+    min_confidence: float = 0.75
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,11 @@ class MetricVerdict:
     # True when a neutral posture is still out of tolerance against this
     # baseline, so the metric can never be satisfied however well you sit.
     unreachable: bool = False
+    # How much the model trusts the landmarks this metric rests on, and whether
+    # that was enough to act on. Low confidence never suppresses the reading,
+    # only the alert.
+    confidence: float | None = None
+    low_confidence: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -109,6 +121,8 @@ class MetricVerdict:
             "derived": None if self.derived is None else round(self.derived, 3),
             "source": self.source,
             "unreachable": self.unreachable,
+            "confidence": None if self.confidence is None else round(self.confidence, 3),
+            "low_confidence": self.low_confidence,
         }
 
 
@@ -245,6 +259,7 @@ class PostureDetector:
         self._flagged: set[tuple[int, str]] = set()
         self._state = AWAY
         self._suspect: tuple[str, ...] = ()
+        self._confidence: dict[tuple[int, str], float | None] = {}
         self._state_since = 0.0
         self._last_person_at: float | None = None
         self._last_usable_at: float | None = None
@@ -332,6 +347,7 @@ class PostureDetector:
                 ident = (sample.camera_index, spec.key)
                 fresh[ident] = (value, centre, tol, ratio, excess)
                 self._latest[ident] = (value, centre, tol)
+                self._confidence[ident] = sample.confidence.get(spec.key)
 
         for ident, (_v, _c, _t, _r, excess) in fresh.items():
             window = self._windows.get(ident)
@@ -366,6 +382,10 @@ class PostureDetector:
         if tol is None:
             return False
         return met.neutral_shortfall(spec, baseline.metrics[spec.key].centre, tol) > 0.0
+
+    def _is_low_confidence(self, camera: int, key: str) -> bool:
+        confidence = self._confidence.get((camera, key))
+        return confidence is not None and confidence < self.settings.min_confidence
 
     def _live_windows(self, now: float) -> dict[tuple[int, str], MetricWindow]:
         """Windows still holding an observation recent enough to reason about.
@@ -419,6 +439,12 @@ class PostureDetector:
             # as a calibration problem instead.
             if self._unreachable(spec, camera):
                 suspect.add(spec.label)
+                continue
+            # Measured badly is not the same as measured. A metric the model is
+            # unsure of still shows on the panel, faded, but it does not get to
+            # take over the screen -- an alert raised on a landmark that was
+            # half guessed is one the person cannot act on and cannot clear.
+            if self._is_low_confidence(camera, spec.key):
                 continue
             # "Full enough" is measured in elapsed time, not sample count, so
             # it stays correct while the sample rate varies at runtime.
@@ -482,6 +508,8 @@ class PostureDetector:
                     floor=spec.min_tolerance, ceiling=spec.max_tolerance,
                     derived=derived, source=source,
                     unreachable=self._unreachable(spec, camera),
+                    confidence=self._confidence.get((camera, spec.key)),
+                    low_confidence=self._is_low_confidence(camera, spec.key),
                 )
                 if best_row is None or (row.ratio or 0.0) > (best_row.ratio or 0.0):
                     best_row = row
