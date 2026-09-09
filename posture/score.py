@@ -19,6 +19,30 @@ reached for a mug; sustained fraction alone would take a minute to react to a
 genuine slump. Blending them gives a number that moves when you move but only
 falls a long way when a deviation persists.
 
+The blend alone did not deliver that second half. Any ratio at or past
+``RATIO_FLOOR`` maxes the instantaneous term, so a single wild reading cost 60
+points on its own, whatever the window said. Measured live: a metric out of
+tolerance for half its window scored 19 out of 100 -- "needs correction" -- while
+the detector's own state was "good" and no alert was firing, because the
+detector will not call a metric bad until it has been out for ``bad_fraction``
+of the window. The score has no business contradicting the verdict it is
+derived from.
+
+So the blend is capped by how much of the window actually supports it, and the
+cap is anchored to the bands, because the band is what the panel shows:
+
+* nothing in the window supports the deviation -- it may dent the score, but
+  not push it out of "good";
+* the window is as full as the detector needs to call it bad -- the score may
+  reach the bottom of "fair", but not cross into "needs correction" while the
+  app's own verdict is that your posture is fine;
+* past that the detector agrees, the cap lifts, and the score is free to
+  bottom out.
+
+The cap makes the score plateau rather than keep falling once a deviation
+outruns its evidence. That is the point: how far out you are right now is worth
+something, but not more than the window will vouch for.
+
 The overall score takes the *worst* metric rather than an average, matching how
 the detector already works: one axis being wrong is enough. Averaging would let
 three good metrics hide a badly forward head.
@@ -43,6 +67,20 @@ SUSTAINED_WEIGHT = 0.4
 # units of its own tolerance. Past this the score has already bottomed out for
 # that metric, so there is nothing to gain from scaling further.
 RATIO_FLOOR = 1.5
+
+# The detector will not call a metric bad until it has been out of tolerance
+# for this much of its rolling window. Mirrored rather than imported, so this
+# module stays a leaf testable against plain stand-ins; the real value is
+# passed in by the monitor, and a test pins this default to the detector's.
+DEFAULT_BAD_FRACTION = 0.70
+
+# The two anchors of the cap, in severity. Severity 0.30 is a score of 70, the
+# floor of "good"; 0.50 is a score of 50, the floor of "fair". Both are read
+# off BANDS below rather than chosen independently -- a cap that did not land
+# on a band boundary would show up as a number that stops just short of a
+# label for no visible reason.
+UNSUPPORTED_CEILING = 0.30
+THRESHOLD_CEILING = 0.50
 
 # Score bands. Ordered worst-first so the first match wins on a simple scan.
 BANDS: tuple[tuple[int, str, str], ...] = (
@@ -98,18 +136,58 @@ def band_for(value: int) -> tuple[str, str]:
     return label, tone
 
 
-def metric_severity(ratio: float | None, out_fraction: float) -> float:
-    """Blend "how far out now" with "how long it has been out", on 0..1."""
+def severity_ceiling(out_fraction: float,
+                     bad_fraction: float = DEFAULT_BAD_FRACTION,
+                     flagged: bool = False) -> float:
+    """How far down the score may go on this much sustained evidence.
+
+    Piecewise linear through the two band anchors, and continuous at both
+    joints, so the number never jumps as the window fills.
+
+    ``flagged`` lifts the cap outright, because it is the detector's own answer
+    and the cap exists only to avoid contradicting it. It is not the same
+    question as ``out_fraction > bad_fraction``: hysteresis keeps a metric
+    flagged while its out-fraction falls back under the threshold, and a
+    reassuring score beside an alert that is still on screen would be the same
+    contradiction in the other direction.
+    """
+    if flagged:
+        return 1.0
+    out_fraction = min(max(out_fraction, 0.0), 1.0)
+    if bad_fraction <= 0.0:          # every deviation counts as confirmed
+        return 1.0
+    if out_fraction <= bad_fraction:
+        share = out_fraction / bad_fraction
+        return UNSUPPORTED_CEILING + (THRESHOLD_CEILING - UNSUPPORTED_CEILING) * share
+    if bad_fraction >= 1.0:          # nothing short of the whole window counts
+        return THRESHOLD_CEILING
+    share = (out_fraction - bad_fraction) / (1.0 - bad_fraction)
+    return THRESHOLD_CEILING + (1.0 - THRESHOLD_CEILING) * share
+
+
+def metric_severity(ratio: float | None, out_fraction: float,
+                    bad_fraction: float = DEFAULT_BAD_FRACTION,
+                    flagged: bool = False) -> float:
+    """Blend "how far out now" with "how long it has been out", on 0..1.
+
+    Capped by :func:`severity_ceiling`, so the blend can never claim more than
+    the window supports.
+    """
     now = 0.0 if ratio is None else min(max(ratio, 0.0), RATIO_FLOOR) / RATIO_FLOOR
     sustained = min(max(out_fraction, 0.0), 1.0)
-    return NOW_WEIGHT * now + SUSTAINED_WEIGHT * sustained
+    blended = NOW_WEIGHT * now + SUSTAINED_WEIGHT * sustained
+    return min(blended, severity_ceiling(out_fraction, bad_fraction, flagged))
 
 
-def score_verdict(verdict: Any) -> PostureScore:
+def score_verdict(verdict: Any,
+                  bad_fraction: float = DEFAULT_BAD_FRACTION) -> PostureScore:
     """Turn a :class:`detector.PostureVerdict` into a score.
 
     Takes the verdict duck-typed rather than imported, so this module stays a
-    leaf and can be unit-tested against plain stand-ins.
+    leaf and can be unit-tested against plain stand-ins. ``bad_fraction`` is
+    the detector's own threshold, passed in for the same reason -- the caller
+    has the settings that produced this verdict, and a copy here could drift
+    from them silently.
     """
     state = getattr(verdict, "state", "unknown")
     if not getattr(verdict, "calibrated", False):
@@ -124,7 +202,8 @@ def score_verdict(verdict: Any) -> PostureScore:
 
     rows: list[MetricScore] = []
     for metric in getattr(verdict, "metrics", ()):
-        severity = metric_severity(metric.ratio, metric.out_fraction)
+        severity = metric_severity(metric.ratio, metric.out_fraction, bad_fraction,
+                                   getattr(metric, "flagged", False))
         rows.append(MetricScore(
             key=metric.key, label=metric.label, severity=severity,
             score=int(round(100 * (1.0 - severity))),

@@ -482,6 +482,22 @@ of the rolling window you have spent out of it*, then takes the **worst** axis
 rather than an average, matching the detector's own rule that one bad axis is
 enough. Bands: 85+ excellent, 70+ good, 50+ fair, below that needs correction.
 
+**The score may not contradict the verdict it comes from.** The blend alone did
+not manage that: any ratio at or past the floor maxes the instantaneous term, so
+a single wild reading cost 60 points whatever the window said. Found live — a
+metric out of tolerance for half its window scored 19, *needs correction*, while
+the detector's own state was `good` and no alert was firing, because the
+detector will not call a metric bad until it has been out for `bad_fraction`
+(70%) of the window. So the blend is capped by how much of the window supports
+it, anchored to the bands the panel actually shows: with nothing in the window
+behind it a deviation may dent the score but not push it out of *good*; at the
+detector's own threshold it may reach the floor of *fair* but not cross into
+*needs correction*; past that the detector agrees, the cap lifts, and the score
+is free to bottom out. A metric the detector has flagged is never capped at all.
+The cap makes the score plateau once a deviation outruns its evidence, which is
+the point — how far out you are right now is worth something, but not more than
+the window will vouch for.
+
 There is deliberately **no score** when nobody is at the desk, when the
 landmarks cannot be read, or before calibration. A confident 100 over an empty
 chair would be a lie, so the server sends null and the panel shows why.

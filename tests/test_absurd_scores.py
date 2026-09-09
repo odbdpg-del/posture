@@ -136,11 +136,15 @@ class TestTheSymptomItself:
 
         class FakeMetric:
             key, label = "shoulder_tilt", "Shoulder tilt"
-            ratio, out_fraction = 13.132, 0.518
+            ratio, out_fraction, flagged = 13.132, 0.518, False
 
         class FakeVerdict:
             state, calibrated = "good", True
             metrics = (FakeMetric(),)
 
-        # The live numbers, kept as a record of what the score did with them.
-        assert scoring.score_verdict(FakeVerdict()).value == 19
+        # Belt and braces. Fed the live numbers directly, the score no longer
+        # calls it "needs correction" either: the detector's state was "good"
+        # and it had not flagged the metric, so the score is capped out of the
+        # bad band. Both defences would have to fail to get 19 back.
+        s = scoring.score_verdict(FakeVerdict(), 0.70)
+        assert s.band != "needs correction", s.value

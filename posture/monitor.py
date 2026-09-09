@@ -406,7 +406,8 @@ class Monitor:
             # Score and history are derived views of the verdict, updated here
             # so every sample is reflected exactly once. Both are read-only to
             # everything downstream.
-            self._score = scoring.score_verdict(verdict)
+            self._score = scoring.score_verdict(
+                verdict, self._detector.settings.bad_fraction)
             self.history.record(self._score.value, verdict.state, verdict)
             self._alert_state = self._alerts.update(verdict)
             events = self._alerts.drain()
