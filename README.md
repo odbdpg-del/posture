@@ -27,6 +27,10 @@ Platform assumed: **Windows 11** (from the environment this was built on; the
 brief left it blank). Nothing is Windows-specific except the camera backend
 order in `capture.py`, which already falls through to a portable default.
 
+Double-clicking `start-posture.bat` does the whole of this section and then
+starts the app, so the two steps below are only worth running by hand if you
+want the dev dependencies as well, or you are not on Windows.
+
 ```bash
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ```
@@ -36,6 +40,14 @@ python -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements-
 ```
 
 ## Run it
+
+Double-click **`start-posture.bat`**. On a fresh machine the first run builds
+the virtual environment and downloads the pose model, which takes a few
+minutes; after that it goes straight to the app. It passes any flags through,
+so `start-posture.bat --diagnose` works too, and it keeps its window open with
+the reason if a step fails rather than closing before you can read it.
+
+Or, equivalently:
 
 ```bash
 .venv/Scripts/python.exe -m posture

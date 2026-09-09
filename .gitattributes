@@ -1,3 +1,6 @@
 # The working tree is LF everywhere already. Without this, core.autocrlf=true
 # on Windows checks these files out as CRLF and every line reads as changed.
 * text=auto eol=lf
+
+# cmd.exe is unreliable with LF-only batch files, so this one keeps CRLF.
+*.bat text eol=crlf
