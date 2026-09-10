@@ -418,7 +418,12 @@ part-completed hold, because you cannot claim to have been continuously within
 tolerance across a stretch nobody measured.
 
 **The snooze is explicit and time-boxed.** There is no one-click dismiss — a
-test asserts the engine exposes no such method. A snooze suppresses escalation
+test asserts the engine exposes no such method. **Escape triggers the snooze**,
+which is the same exit the button has always offered rather than a new one: a
+window that covers the screen and can only be dismissed by pointing at it is a
+trap for anyone whose hands are on the keyboard. It takes keyboard focus to
+receive the key, so keystrokes typed at a screen you cannot see land there and
+are dropped instead of going invisibly into whatever is behind it. A snooze suppresses escalation
 for a fixed period and then resumes *from nothing*, so it can never quietly
 become "off forever".
 

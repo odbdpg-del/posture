@@ -3,8 +3,9 @@
 This is the escalation's last step and the only part of the app that takes over
 your screen, so it is built to be honest about how to get rid of it: a live
 countdown of the hold, driven by the same posture readings as everything else.
-It cannot be dismissed by clicking. The only exits are fixing your posture for
-the required stretch, or an explicit, time-boxed snooze.
+It cannot be dismissed by clicking it away. The only exits are fixing your
+posture for the required stretch, or an explicit, time-boxed snooze -- which
+Escape triggers, so the exit does not require a mouse.
 
 Threading
 ---------
@@ -301,6 +302,13 @@ class OverlayWindow:
         self._visible = False
         self._commands.put(("hide", "", "", 0.0, None, OverlayView()))
 
+    def press(self, key: str) -> None:
+        """Deliver a keypress to the window. For tests: the overlay owns its
+        own Tk thread, so a test cannot reach the widget directly."""
+        if not self._visible:
+            return
+        self._commands.put(("key", key, "", 0.0, None, OverlayView()))
+
     def stop(self, timeout: float = 3.0) -> None:
         """Close the window and wait for its thread to finish.
 
@@ -382,12 +390,21 @@ class OverlayWindow:
         note.pack(pady=(26, 10))
 
         snooze = tk.Button(
-            wrap, text="Snooze", bg="#161E1A", fg=INK, activebackground="#1B241F",
+            wrap, text="Snooze  ·  Esc", bg="#161E1A", fg=INK,
+            activebackground="#1B241F",
             activeforeground=INK, relief="flat", padx=18, pady=7,
             font=("Segoe UI", 10), cursor="hand2",
             command=lambda: self._snooze_clicked(),
         )
         snooze.pack()
+
+        # Escape does exactly what the button does, and it is on the button so
+        # that it can be found. This is not a new way out -- the snooze was
+        # always one click away -- it is the same way out reachable without a
+        # mouse. A window that covers the screen and can only be dismissed by
+        # pointing at it is a trap for anyone whose hands are on the keyboard,
+        # which at a desk is everyone.
+        root.bind("<Escape>", lambda _e: self._snooze_clicked())
 
         def pump() -> None:
             try:
@@ -400,6 +417,9 @@ class OverlayWindow:
                         return
                     if kind == "hide":
                         root.withdraw()
+                        continue
+                    if kind == "key":
+                        root.event_generate(head)
                         continue
                     headline.config(text=head)
                     detail.config(text=det)
@@ -420,6 +440,17 @@ class OverlayWindow:
                         root.deiconify()
                         root.attributes("-topmost", True)
                         root.lift()
+                        # An override-redirect window gets no keyboard focus
+                        # from Windows, so Escape would never reach it. Taking
+                        # focus is the trade this makes: keystrokes typed at a
+                        # screen you cannot see now land here and are dropped,
+                        # rather than going invisibly into whatever is behind.
+                        # Given the window is already covering that, dropping
+                        # them is the better of the two.
+                        try:
+                            root.focus_force()
+                        except Exception:  # pragma: no cover - platform quirk
+                            log.debug("could not focus the overlay", exc_info=True)
             except queue.Empty:
                 pass
 

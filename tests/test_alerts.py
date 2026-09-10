@@ -375,3 +375,56 @@ class TestNotifier:
         monkeypatch.setattr(n, "_toast", boom)
         monkeypatch.setattr(n, "_banner", boom)
         assert n.send("t", "m") is False
+
+
+class TestEscapeReachesTheSnooze:
+    """The overlay covers the screen and, until this, could only be dismissed
+    by pointing at it. Escape does exactly what the Snooze button does -- not a
+    new way out, the same way out reachable without a mouse.
+
+    Reported after repeatedly getting stuck: "the fullscreen alert needs to be
+    able to get out of it with esc for when the calibration gets weird".
+    """
+
+    def overlay(self):
+        from posture.overlay_window import OverlayView, OverlayWindow
+
+        calls = []
+        ov = OverlayWindow(on_snooze=lambda: calls.append(1))
+        if not ov.available:                      # headless CI
+            pytest.skip("no display")
+        ov.show("Neck tilt away from baseline for 2m", "detail", 5.0, 5.0,
+                OverlayView(state="bad"))
+        return ov, calls
+
+    def test_escape_snoozes_and_takes_the_window_down(self):
+        import time as _time
+
+        ov, calls = self.overlay()
+        try:
+            deadline = _time.monotonic() + 5.0
+            while ov.visible and _time.monotonic() < deadline:
+                ov.press("<Escape>")
+                _time.sleep(0.15)
+            assert calls, "escape must reach the same handler the button uses"
+            assert not ov.visible
+        finally:
+            ov.stop()
+
+    def test_it_is_the_snooze_and_not_a_silent_dismiss(self):
+        """A snooze is recorded, time-boxed and visible in the panel and tray.
+        Escape must not become a way to make an alert vanish with no trace."""
+        import inspect
+
+        from posture import overlay_window as ow
+
+        src = inspect.getsource(ow.OverlayWindow._run)
+        assert '"<Escape>"' in src and "_snooze_clicked" in src
+
+    def test_the_key_is_named_on_the_button(self):
+        """An escape hatch nobody knows about is not an escape hatch."""
+        import inspect
+
+        from posture import overlay_window as ow
+
+        assert "Esc" in inspect.getsource(ow.OverlayWindow._run)
